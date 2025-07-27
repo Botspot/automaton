@@ -55,8 +55,8 @@ mkfifo /tmp/named-pipe
 ./automaton/subimage-search.py /tmp/named-pipe
 
 #in another terminal:
-echo -e '/home/pi/Pictures/20250726_16h19m46s_grim.png\t/home/pi/Pictures/20250726_16h19m46s_grim-c.png' > /tmp/named-pipe
-#the first PNG is the full screenshot, the second PNG is cropped to show the object of interest
+echo -e '/home/pi/Pictures/screenshot.png\t/home/pi/Pictures/cropped.png' > /tmp/named-pipe
+#provide full paths to 2 images: a full screenshot and a cropped version with your object of interest
 
 #watch the output in the first terminal - it should respond with something like:
 Coordinates: (1446, 649), Similarity: 1.0
