@@ -1,5 +1,5 @@
 # automaton
-Bash-based alternative to SikuliX, this automates human actions on linux with computer vision
+Bash-based alternative to SikuliX, this automates any task on linux with computer vision
 
 > **au·tom·a·ton  (ô-tŏmʻə-tŏn′, -tən)**  
 > *noun*  
@@ -9,7 +9,7 @@ The goal here is to automate nearly any repetitive task on a computer - not just
 
 Imagine you want to download a payment report file from your bank's website. And the website is slow, and it takes a lot of clicks to do get the job done.  
 I once made a little shell script that did something like:
-```
+```bash
 chromium https://my.bank & # go to my bank's website
 sleep 60                   # wait for page to load
 
@@ -28,7 +28,7 @@ type Alt+F4                # close the browser
 ...And it stopped working in a week, because the website got updated and one of the buttons moved downwards a few pixels.  All subsequent steps had the mouse clicking in random places on the login screen.  
 
 With Automaton, you could show it a screenshot of what to look for, and it will find it no matter where it appears on the screen. So now the script could be like:
-```
+```bash
 chromium https://my.bank &        # go to my bank's website
 find_and_click username-field.png # wait for username field to appear, and click it
 type '********'                   # type the username
