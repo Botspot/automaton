@@ -1,0 +1,460 @@
+#!/bin/bash
+
+#export all functions so they are reachible by bash subprocesses, such as in `timeout`
+set -a
+
+error() {
+  echo -e "\e[91m$1\e[39m" 1>&2
+  if [ ${#FUNCNAME[@]} -gt 2 ];then #return 1 if running inside of another function (exits the function)
+    return 1
+  else #otherwise exit the running script, if not within a function
+    exit 1
+  fi
+}
+
+warning() { #yellow text
+  echo -e "\e[93m\e[5m◢◣\e[25m WARNING: $1\e[0m" 1>&2
+}
+
+status() { #cyan text to indicate what is happening
+  
+  #detect if a flag was passed, and if so, pass it on to the echo command
+  if [[ "$1" == '-'* ]] && [ ! -z "$2" ];then
+    echo -e $1 "\e[96m$2\e[0m" 1>&2
+  else
+    echo -e "\e[96m$1\e[0m" 1>&2
+  fi
+}
+
+status_green() { #announce the success of a major action
+  echo -e "\e[92m$1\e[0m" 1>&2
+}
+
+wait_for_file_creation() { #wait for the $1 file to be created
+  if [ -z "$1" ];then
+    error "wait_for_file_creation() requires a file argument"
+  elif [ -e "$1" ];then
+    return 0 #file already exists, exit immediately
+  fi
+  inotifywait -e create "$(dirname "$1")" --include "$(basename "$1")" -q #>/dev/null
+}
+
+select_point() { #select a single XY point on the screen, outputs "X,Y"
+  if [ "$XDG_SESSION_TYPE" == x11 ];then
+    xwininfo &>/dev/null #abusing this for point selection UX
+    xdotool getmouselocation | awk '{print $1":"$2}' | awk -F':' '{print $2","$4}'
+  elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    slurp -p | awk '{print $1}'
+  fi
+}
+
+select_rectangle() { #select a rectangular region on the screen, outputs "X,Y WxH"
+  if [ "$XDG_SESSION_TYPE" == x11 ];then
+    slop -t 0 | awk -F'+' '{print $2","$3" "$1}' #awk rearranges the params so the output matches that of slurp
+  elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    slurp
+  fi
+}
+
+screenshot_rectangle() { #take a screenshot of the $1 rectangular region of the screen (X,Y WxH), save it to $2 png file
+  if [[ "$1" != *','*' '*'x'* ]];then
+    error "screenshot_rectangle(): first argument must be in the format 'X,Y WxH'"
+  elif [[ "$2" != '/'* ]];then
+    error "screenshot_rectangle(): second argument must be a filepath"
+  fi
+  
+  if [ "$XDG_SESSION_TYPE" == x11 ];then
+    scrot --autoselect "$(echo "$1" | tr ' x' ',')" -zoF "$2"
+  elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    grim -g "$1" "$2"
+  fi
+  [ $? == 0 ] || error "screenshot_rectangle(): failed, please review errors above"
+}
+
+screenshot_fullscreen() { #take a screenshot of the full screen, save it to $1 png file
+  if [[ "$1" != '/'* ]];then
+    error "screenshot_fullscreen(): first argument must be a filepath"
+  fi
+  
+  if [ "$XDG_SESSION_TYPE" == x11 ];then
+    scrot -zoF "$1"
+  elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    grim "$1"
+  fi
+  [ $? == 0 ] || error "screenshot_fullscreen(): failed, please review errors above"
+}
+
+locator_start() { #start python opencv process that waits for targets on screen to find
+  [ ! -z "$locator_pipe" ] || error 'locator_start(): $locator_pipe is not set! This should have been set when sourcing the automaton api.'
+  
+  rm -f "$locator_pipe" "${locator_pipe}.out" || error "locator_start(): Failed to first remove '$locator_pipe' file!"
+  
+  #run it as a background process (it will stop when the named pipe is deleted)
+  "$AUTOMATON_DIR/locator.py" "$locator_pipe" &
+  
+  #wait for the python script to create the named pipe using inotifywait
+  timeout 10 bash -c "wait_for_file_creation '$locator_pipe.out'" || error "locator.py failed to initialize within 10 seconds. Please refer to errors above."
+}
+
+locator_stop() {
+  rm -f "$locator_pipe" || error "locator_stop(): Failed to remove '$locator_pipe'!"
+  rm -f "${locator_pipe}.out" || error "locator_stop(): Failed to remove '${locator_pipe}.out'!"
+}
+
+locate_pattern() { #locate where on the screen the specified target is. (X,Y) No output if not found.
+  #pattern name to look for (assumed to be saved in project folder)
+  local pattern="$PATTERNS_DIR/$1.png"
+  [ -f "$pattern" ] || error "locate_pattern(): screenshot png file at '$pattern' not found!"
+  [ -p "$locator_pipe" ] || error "locate_pattern(): locator_start must be run first! ($locator_pipe does not exist)"
+  
+  #pixel offset provided ahead of time. Format: +X+Y
+  if [[ "$2" == '+'* ]];then
+    local offset="$2"
+  elif [ "$2" == center ];then
+    #user can specify offset 'center' to use +L/2+W/2 of the pattern.  
+    local offset width= height=
+    local IFS=' '
+    read width height < <(magick identify -ping -format '%w %h' "$pattern")
+    # Calculate midpoint
+    offset=+$((width / 2))+$((height / 2))
+  fi
+  echo "offset is $offset" 1>&2
+  
+  #save temporary screenshot to RAM - name it something unique for this script by using the full path of patterns directory, with '/' replaced with '-'
+  local screenshot="$RAM_LOCATION/automaton-${pattern//\//-}.png"
+  screenshot_fullscreen "$screenshot" || return 1
+  
+  echo -e "$pattern\t$screenshot" > "$locator_pipe" #this will block until locator reads it
+  #response is sent back through the pipe, this will wait for it
+  
+  local location
+  if read location <"${locator_pipe}.out" ;then #read blocks until something is in the output pipe
+    #read returns code 0 if [ ! -z "$location" ]
+    rm -f "$screenshot"
+    if [ ! -z "$offset" ];then
+      #if no offset given, output coordinates of top-left corner of pattern found
+      #otherwise, apply the offset before outputting it
+      local x_location="$(echo "$location" | awk '{print $1}' | awk -F, '{print $1}')"
+      local y_location="$(echo "$location" | awk '{print $1}' | awk -F, '{print $2}')"
+      local x_offset="$(echo "$offset" | awk -F + '{print $2}')"
+      local y_offset="$(echo "$offset" | awk -F + '{print $3}')"
+      location=$((x_location+x_offset)),$((y_location+y_offset))
+    fi
+    echo "$location"
+    status_green "Found pattern '$1' at $location"
+  else
+    #read returns code 1 if it received nothing (pattern not found)
+    rm -f "$screenshot"
+    #message user that pattern could not be found, UNLESS this function is being run by locate_pattern_retry
+    local IFS=' '
+    if [[ " ${FUNCNAME[*]} " =~ " locate_pattern_retry " ]]; then
+      #avoid spamming, while allowing other error messages to go unhindered
+      return 1
+    else
+      error "locate_pattern(): failed to find '$1' on screen."
+    fi
+  fi
+}
+
+locate_pattern_retry() {
+  echo "Waiting to locate pattern '$1'... " 1>&2
+  while ! locate_pattern "$@" ;do
+    true
+  done
+}
+
+mouse_move() { #move mouse to absolute position $1 (format X,Y)
+  local IFS=' '
+  [ -z "$1" ] && error "mouse_move(): no input coordinates"
+  if [ "$XDG_SESSION_TYPE" == x11 ];then
+    #xdotool allows absolute mouse movements
+    xdotool mousemove --sync $(echo "$1" | tr ',' ' ')
+  elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    #wlrctl only allows relative movements, so move to top left corner first
+    wlrctl pointer move -1000000 -1000000
+    #and then move to desired location, replacing ',' with space
+    wlrctl pointer move $(echo "$1" | tr ',' ' ')
+  fi
+}
+
+mouse_click() { #normal mouse click
+  if [ "$XDG_SESSION_TYPE" == x11 ];then
+    xdotool click 1
+  elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    wlrctl pointer click left
+  fi
+}
+
+mouse_scroll_down() { #scroll down $1 times (once if not specified)
+  local scrolltimes="$1"
+  if [ -z "$scrolltimes" ];then
+    scrolltimes=1 #default value 1 if not set
+  fi
+  
+  if [ "$XDG_SESSION_TYPE" == x11 ];then
+    for ((n=0;n<$scrolltimes;n++)); do
+      xdotool click 5
+    done
+  elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    wlrctl pointer scroll $((15*scrolltimes))
+  fi
+  sleep 0.5s #browsers animate after scroll event, so wait for it to finish
+}
+
+mouse_scroll_up() { #scroll up $1 times (once if not specified)
+  local scrolltimes="$1"
+  if [ -z "$scrolltimes" ];then
+    scrolltimes=1 #default value 1 if not set
+  fi
+  
+  if [ "$XDG_SESSION_TYPE" == x11 ];then
+    for ((n=0;n<$scrolltimes;n++)); do
+      xdotool click 4
+    done
+  elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    wlrctl pointer scroll $((-15*scrolltimes))
+  fi
+  sleep 0.5s #browsers animate after scroll event, so wait for it to finish
+}
+
+clipboard_set() { #copy text in $1 to the primary clipboard
+  if [ "$XDG_SESSION_TYPE" == x11 ];then
+    echo -n "$1" | xclip -i -selection clipboard
+  elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    echo -n "$1" | wl-copy -f
+  fi
+}
+
+keyboard_type() { #type text in $1 with the keyboard
+  if [ "$XDG_SESSION_TYPE" == x11 ];then
+    echo -n "$1" | xdotool type --file -
+  elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    wlrctl type "$1"
+  fi
+}
+
+nested_display_start() { #start a nested x or wayland display (must be specified)
+  local display_type="$1"
+  local display_dimensions="$2"
+  
+  #parse display dimensions, if given
+  local display_width
+  local display_height
+  if [ -z "$display_dimensions" ];then
+    display_dimensions=1366x768
+  fi
+  display_width="$(echo "$display_dimensions" | awk -Fx '{print $1}')"
+  display_height="$(echo "$display_dimensions" | awk -Fx '{print $2}')"
+  if [ -z "$display_width" ] || [ -z "$display_height" ];then
+    error "nested_display(): display dimensions not set correctly! Value was: '$display_dimensions'"
+  fi
+  
+  #weston can run x11 in wayland, wayland in x11, wayland in wayland, and x11 in x11. Splendid!!
+  #it also autodetects unoccupied x11 and wayland displays, (unlike Xephyr/Xvfb) preventing these from needing to be handled here.
+  case "$display_type" in
+    x11|x11-headless)
+      #find an unoccupied x display to use
+      x_display=0
+      while [ -e /tmp/.X11-unix/X$x_display ];do
+        x_display=$((x_display+1))
+      done
+      
+      #different tools are used, depending on whether the user wants a headless or a visible window
+      case "$display_type" in
+        x11)
+        #xephyr
+        Xephyr -no-host-grab -title "Automaton nested x11 display on $x_display" -ac -screen ${display_width}x${display_height} -br -glamor -dpi 96 ":$x_display" &
+        export nested_display_pid=$!
+        ;;
+      x11-headless)
+        #xvfb
+        Xvfb -ac -screen ${display_width}x${display_height} -br -glamor -dpi 96 ":$x_display" 2>/dev/null
+        export nested_display_pid=$!
+        ;;
+      esac
+      #before this function exits, the display needs to be ready for connections.
+      #Wait for lockfile creation
+      wait_for_file_creation /tmp/.X11-unix/X$x_display
+      
+      #all apps downstream now use this DISPLAY and XDG_SESSION_TYPE, and ensure WAYLAND_DISPLAY is unset
+      export XDG_SESSION_TYPE=x11
+      export DISPLAY=:$x_display
+      unset WAYLAND_DISPLAY
+      export WAYLAND_DISPLAY
+      
+      #a desktop manager must be run, otherwise nothing can be resized or maximized
+      echo before
+      while read line ;do
+        #run openbox in the background, but do not proceed until it has initialized
+        if [ "$line" == 'openbox ready' ];then
+          break
+        fi
+      done < <(openbox --sm-disable --config-file /dev/null --startup "echo openbox ready")
+      echo after
+      ;;
+    wayland|wayland-headless)
+      #wayland nested display
+      
+      #determine which backend to use (the environment in which the nested display runs)
+      local weston_backend=()
+      if [ "$display_type" == wayland-headless ];then
+        weston_backend=(--backend="headless-backend.so")
+      elif [ "$XDG_SESSION_TYPE" == x11 ];then
+        weston_backend=(--backend="x11-backend.so")
+      elif [ "$XDG_SESSION_TYPE" == wayland ];then
+        weston_backend=(--backend="wayland-backend.so")
+      else
+        error "nested_display(): Seems like your system is headless. (no wayland or x11 desktop session found)\nTo run this function headless, use the 'wayland-headless' mode."
+      fi
+      
+      #run weston, which runs env, so capture the new values of DISPLAY and WAYLAND_DISPLAY and export them 
+      while read line ;do
+        #echo "line is $line"
+        if [[ "$line" == WAYLAND_DISPLAY=* ]] || [[ "$line" == DISPLAY=* ]];then
+          export "$line" #export the variable that weston informed us of
+          
+        elif [[ "$line" == nested_display_pid=* ]];then
+          export "$line" #export nested_display_pid for nested_display_stop
+          
+        elif [[ "$line" == WESTON_CONFIG_FILE=* ]];then
+          break #we have reached the end of env output, DISPLAY and WAYLAND_DISPLAY have already been set, so exit and leave weston running as a background process
+        fi
+        export "$line" #export the variable that weston informed us of
+        #to run weston on RPi with GPU acceleration, add MESA_LOADER_DRIVER_OVERRIDE=v3d and remove --use-pixman
+        #weston version (on bookworm at least) does not support running a program directly on the command-line, or --renderer=pixman
+      done < <(weston "${westonbackend[@]}" --width="$display_width" --height="$display_height" --use-pixman --xwayland -c "${AUTOMATON_DIR}/weston.ini" & nested_display_pid=$! ; echo "nested_display_pid=$nested_display_pid" ; wait $nested_display_pid)
+      ;;
+    *)
+      error "nested_display(): not sure if you need a X11 or Wayland display, headless or not.\nPlease use 1 of the following 4 arguments: x11, x11-headless, wayland, wayland-headless"
+      ;;
+  esac
+  #from this point on, any GUI programs run by the userscript will spawn in the nested display.
+  
+  #make sure the nested display is killed when the userscript ends
+  trap "nested_display_stop" EXIT SIGINT
+}
+
+nested_display_stop() {
+  kill $nested_display_pid 2>/dev/null
+  export DISPLAY="$original_DISPLAY"
+  export WAYLAND_DISPLAY="$original_WAYLAND_DISPLAY"
+  export XDG_SESSION_TYPE="$original_XDG_SESSION_TYPE"
+}
+
+#set variables
+if [ -z "$PATTERNS_DIR" ] && [ -z "$AUTOMATON_DIR" ];then
+  error "api: PATTERNS_DIR and AUTOMATON_DIR must be set by the script that sources api"
+elif [ ! -d "$PATTERNS_DIR" ];then
+  error "api: PATTERNS_DIR does not seem to be set correctly. ($PATTERNS_DIR does not exist)" 
+elif [ ! -f "$AUTOMATON_DIR/api" ];then
+  error "api: AUTOMATON_DIR does not seem to be set correctly. ($AUTOMATON_DIR/api does not exist)" 
+fi
+if [ -d /dev/shm ];then
+  RAM_LOCATION=/dev/shm
+else
+  RAM_LOCATION=/tmp
+fi
+#other variables that we want to modify later within functions and want global:
+nested_display_pid=''
+#keep original values to these variables so that 
+original_DISPLAY="$DISPLAY"
+original_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"
+original_XDG_SESSION_TYPE="$XDG_SESSION_TYPE"
+
+#install dependencies
+install_list=()
+#these are needed on both X11 or Wayland
+if [ ! -d /usr/share/doc/python3-opencv ];then 
+  install_list+=('python3-opencv')
+fi
+if [ ! -d /usr/share/doc/python3-numpy ];then
+  install_list+=('python3-numpy')
+fi
+if ! command -v inotifywait >/dev/null ;then
+  install_list+=('inotify-tools')
+fi
+if ! command -v identify >/dev/null ;then
+  install_list+=('imagemagick-6.q16')
+fi
+
+#nested display tools: if you do not plan to use nested_display function, set SKIP_INSTALLING_NESTED_DEPS=1 to avoid installing these
+if [ "$SKIP_INSTALLING_NESTED_DEPS" != 1 ];then
+  if ! command -v Xvfb >/dev/null ;then
+    install_list+=('xvfb')
+  fi
+  if ! command -v Xephyr >/dev/null ;then
+    install_list+=('xserver-xephyr')
+  fi
+  if ! command -v weston >/dev/null ;then
+    install_list+=('weston')
+  fi
+  if ! command -v openbox >/dev/null ;then
+    install_list+=('openbox')
+  fi
+fi
+
+#X11 or Wayland have different dependencies
+if [ "$XDG_SESSION_TYPE" == x11 ];then #these dependencies are required only on distros that are X11
+  if ! command -v xwininfo >/dev/null ;then
+    install_list+=('x11-utils')
+  fi
+  if ! command -v xdotool >/dev/null ;then
+    install_list+=('xdotool')
+  fi
+  if ! command -v slop >/dev/null ;then
+    install_list+=('slop')
+  fi
+  if ! command -v scrot >/dev/null ;then
+    install_list+=('scrot')
+  fi
+  if ! command -v xclip >/dev/null ;then
+    install_list+=('xclip')
+  fi
+elif [ "$XDG_SESSION_TYPE" == wayland ];then #these dependencies are required only on distros that are Wayland
+  if ! command -v slurp >/dev/null ;then
+    install_list+=('slurp')
+  fi
+  if ! command -v grim >/dev/null ;then
+    install_list+=('grim')
+  fi
+  #for compiling wlrctl
+  if ! command -v wlrctl >/dev/null ;then
+    need_to_compile_wlrctl=yes
+    install_list+=('cmake' 'libxkbcommon-dev' 'libwayland-dev')
+  fi
+  if ! command -v wl-copy >/dev/null ;then
+    install_list+=('wl-clipboard')
+  fi
+fi
+#now if anything is missing, install it
+if [ ! -z "${install_list[*]}" ];then
+  status "Installing dependencies... running sudo apt update"
+  sudo apt update || true
+  status "Installing dependencies: ${install_list[*]}"
+  sudo apt install -y "${install_list[@]}" || error "Failed to install dependencies! Please install them yourself: ${install_list[*]}"
+  status_green "Dependencies installed successfully."
+fi
+
+#compile and install wlrctl if on wayland
+if [ "$need_to_compile_wlrctl" == yes ];then
+  status "Compiling wlrctl..."
+  #run in a subshell to avoid changing current directory (downloads and installs in ram)
+  (cd "$RAM_LOCATION"
+  rm -rf ./wlrctl
+  git clone https://git.sr.ht/~brocellous/wlrctl || exit 1
+  cd wlrctl
+  meson setup --prefix=/usr/local build || exit 1
+  sudo ninja -C build install || exit 1
+  cd "$RAM_LOCATION"
+  rm -rf ./wlrctl) || error "Failed to compile wlrctl. Please review errors above."
+  status_green "wlrctl has installed successfully."
+fi
+#now that dependencies are installed, do other things before userscript runs
+
+#choose appropriate location for locator.py named pipe
+locator_pipe="$PATTERNS_DIR/locator_pipe"
+#remove it while being sourced
+rm -f "$locator_pipe"
+
+#stop locator.py when userscript ends so only advanced users need to run locator_stop
+trap locator_stop EXIT SIGINT
