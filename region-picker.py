@@ -1,6 +1,8 @@
+#!/usr/bin/env python3
+
 #This was 100% vibe-coded by Grok 3 in about 4 hours. Impressive.
 
-import pygame
+import pygame_sdl2 as pygame
 import sys
 import math
 from PIL import Image
@@ -205,7 +207,6 @@ class ImagePointSelector:
                     running = False
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
-                        pygame.quit()
                         sys.exit(1)
                     elif event.key in [pygame.K_EQUALS, pygame.K_PLUS]:
                         if self.zoom_index < len(self.zoom_levels) - 1:
@@ -236,12 +237,12 @@ class ImagePointSelector:
                             else:
                                 print(f"{self.x},{self.y}")
                             sys.stdout.flush()
-                            running = False
+                            sys.exit(0)
                         elif self.mode == 'rectangle' and self.is_dragging:
                             print(f"{self.last_displayed_x},{self.last_displayed_y} "
                                   f"+{self.last_displayed_length}+{self.last_displayed_width}")
                             sys.stdout.flush()
-                            running = False
+                            sys.exit(0)
 
             # Clear screen
             self.screen.fill((0, 0, 0))
@@ -346,8 +347,6 @@ class ImagePointSelector:
             pygame.display.flip()
             self.clock.tick(60)
 
-        pygame.quit()
-
     def _zoom_at(self, new_zoom_index, mouse_x, mouse_y):
         # Do not apply rectangle bounds for zooming
         mouse_orig_x, mouse_orig_y = self._canvas_to_original(mouse_x, mouse_y, apply_bounds=False)
@@ -363,7 +362,7 @@ class ImagePointSelector:
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Please specify path to PNG image and mode: 'pixel', 'rectangle', or 'pixel_in_rectangle'")
+        print("region-picker.py: arguments required. region-picker.py [path to PNG image] [mode] available modes: 'pixel', 'rectangle', or 'pixel_in_rectangle'")
         sys.exit(1)
     image_path = sys.argv[1]
     mode = sys.argv[2]
