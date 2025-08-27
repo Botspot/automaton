@@ -36,7 +36,7 @@ wait_for_file_creation() { #wait for the $1 file to be created
   elif [ -e "$1" ];then
     return 0 #file already exists, exit immediately
   fi
-  inotifywait -e create "$(dirname "$1")" --include "$(basename "$1")" -q #>/dev/null
+  inotifywait -e create "$(dirname "$1")" --include "$(basename "$1")" -q >/dev/null
 }
 
 select_point() { #select a single XY point on the screen, outputs "X,Y"
@@ -110,15 +110,17 @@ locate_pattern() { #locate where on the screen the specified target is. (X,Y) No
   #pixel offset provided ahead of time. Format: +X+Y
   if [[ "$2" == '+'* ]];then
     local offset="$2"
-  elif [ "$2" == center ];then
-    #user can specify offset 'center' to use +L/2+W/2 of the pattern.  
-    local offset width= height=
+  elif [ -z "$2" ];then
+    #without explicit offset, use center, which is +L/2+W/2 of the pattern.  
+    local offset='' width='' height=''
     local IFS=' '
-    read width height < <(magick identify -ping -format '%w %h' "$pattern")
+    read width height < <(identify -ping -format '%w %h' "$pattern")
     # Calculate midpoint
-    offset=+$((width / 2))+$((height / 2))
+    offset="+$((width / 2))+$((height / 2))"
+  else
+    error "locate_pattern(): invalid offset value: '$2'"
   fi
-  echo "offset is $offset" 1>&2
+  #echo "offset is $offset" 1>&2
   
   #save temporary screenshot to RAM - name it something unique for this script by using the full path of patterns directory, with '/' replaced with '-'
   local screenshot="$RAM_LOCATION/automaton-${pattern//\//-}.png"
@@ -263,7 +265,7 @@ nested_display_start() { #start a nested x or wayland display (must be specified
       case "$display_type" in
         x11)
         #xephyr
-        Xephyr -no-host-grab -title "Automaton nested x11 display on $x_display" -ac -screen ${display_width}x${display_height} -br -glamor -dpi 96 ":$x_display" &
+        Xephyr -no-host-grab -title "Automaton nested x11 display on :$x_display" -ac -screen ${display_width}x${display_height} -br -glamor -dpi 96 ":$x_display" &
         export nested_display_pid=$!
         ;;
       x11-headless)
@@ -283,19 +285,19 @@ nested_display_start() { #start a nested x or wayland display (must be specified
       export WAYLAND_DISPLAY
       
       #a desktop manager must be run, otherwise nothing can be resized or maximized
-      echo before
+      local obconf='<?xml version="1.0" encoding="UTF-8"?><openbox_config><theme><name>Onyx</name></theme></openbox_config>'
       while read line ;do
         #run openbox in the background, but do not proceed until it has initialized
         if [ "$line" == 'openbox ready' ];then
           break
         fi
-      done < <(openbox --sm-disable --config-file /dev/null --startup "echo openbox ready")
-      echo after
+        #give openbox a minimal config so that it does not complain, and its output must be piped through cat, otherwise it instantly exits for some reason.
+      done < <(echo "$obconf" | openbox --sm-disable --config-file /dev/stdin --startup 'echo openbox ready' | cat)
       ;;
     wayland|wayland-headless)
       #wayland nested display
       
-      #determine which backend to use (the environment in which the nested display runs)
+      #determine which backend to use (the environment in which weston runs)
       local weston_backend=()
       if [ "$display_type" == wayland-headless ];then
         weston_backend=(--backend="headless-backend.so")
@@ -317,7 +319,7 @@ nested_display_start() { #start a nested x or wayland display (must be specified
           export "$line" #export nested_display_pid for nested_display_stop
           
         elif [[ "$line" == WESTON_CONFIG_FILE=* ]];then
-          break #we have reached the end of env output, DISPLAY and WAYLAND_DISPLAY have already been set, so exit and leave weston running as a background process
+          break #we have reached the end of useful env output, DISPLAY and WAYLAND_DISPLAY have already been set, so exit and leave weston running as a background process
         fi
         export "$line" #export the variable that weston informed us of
         #to run weston on RPi with GPU acceleration, add MESA_LOADER_DRIVER_OVERRIDE=v3d and remove --use-pixman
