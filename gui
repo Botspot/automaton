@@ -1,0 +1,214 @@
+#!/bin/bash
+
+AUTOMATON_DIR="$(readlink -f "$(dirname "$0")")"
+
+source "$AUTOMATON_DIR/api" || exit 1
+
+#functions defined below are not available to userscripts.
+gui_pick_region() { #use region-picker.py to pick a rectangular region of the $1 image, outputs rectangle coordinates (X,Y +W+H)
+  if [ ! -f "$1" ];then
+    error "gui_pick_region(): provided image '$1' does not exist!"
+  fi
+  "${AUTOMATON_DIR}/region-picker.py" "$1" rectangle
+}
+
+gui_pick_pixel() { #use region-picker.py to pick a pixel of the $1 image, outputs coordinates (X,Y)
+  if [ ! -f "$1" ];then
+    error "gui_pick_pixel(): provided image '$1' does not exist!"
+  fi
+  "${AUTOMATON_DIR}/region-picker.py" "$1" pixel
+}
+
+generate_thumbnail() { #convert full size screenshot filename (already in cache) and shrink it for thumbnail folder
+  local filename="$1"
+  if [ ! -f "$SCREENSHOTS_CACHE/$filename" ];then
+    error "generate_thumbnail(): file '$SCREENSHOTS_CACHE/$filename' does not exist!"
+  elif [ -f "$THUMBNAILS_CACHE/$filename" ];then
+    #if thumbnail already exists, remove it first
+    rm "$THUMBNAILS_CACHE/$filename"
+  fi
+  convert "$SCREENSHOTS_CACHE/$filename" -resize 25% "$THUMBNAILS_CACHE/$filename"
+}
+
+rename_screenshot() { #rename $1 filename to $2
+  local filename="$1"
+  local destination="$2"
+  if [ ! -f "$SCREENSHOTS_CACHE/$filename" ];then
+    error "rename_screenshot(): file '$SCREENSHOTS_CACHE/$filename' does not exist!"
+  elif [ -z "$destination" ];then
+    error "rename_screenshot(): destination filename not specified!"
+  elif [ -f "$SCREENSHOTS_CACHE/$destination" ];then
+    error "rename_screenshot(): refusing to overwrite '$SCREENSHOTS_CACHE/$destination'"
+  fi
+  
+  mv -f "$SCREENSHOTS_CACHE/$filename" "$SCREENSHOTS_CACHE/$destination"
+  mv -f "$THUMBNAILS_CACHE/$filename" "$THUMBNAILS_CACHE/$destination"
+}
+
+gui_capture_screenshot() { #take a fullscreen screenshot, name it, save to cache, save thumbnail, echo filename
+  local date="$(date +"%Y-%m-%d %X")"
+  screenshot_fullscreen "$SCREENSHOTS_CACHE/$date.png"
+  generate_thumbnail "$date.png"
+  
+  #now ask the user what to name the screenshot
+  local final_filename button
+  local text="Screenshot captured. Choose a unique name:"
+  while true;do
+    final_filename="$(yad "${yadflags[@]}" --image="$THUMBNAILS_CACHE/$date.png" --image-on-top \
+      --form --field="$text:LBL" "" \
+      --field='' "$date" --button=OK:0)"
+    button=$?
+    final_filename="$(echo "$final_filename" | tail -n +2).png"
+    if [ $button != 0 ];then
+      error "User exited screenshot naming dialog" #user cancelled the dialog
+    elif [ "$final_filename" == "$date.png" ];then
+      #user did not rename the file, so leave it as-is
+      break
+    elif [ -f "$THUMBNAILS_CACHE/$final_filename" ];then
+      text="That name is already taken."$'\n'"$text"
+    elif [ "$final_filename" == '.png' ];then
+      text="Name cannot be left blank."$'\n'"$text"
+    else
+      #user chose a valid unique filename
+      rename_screenshot "$date.png" "$final_filename"
+      break
+    fi
+  done
+  
+  echo "$final_filename"
+}
+
+gui_screenshot_picker() { #pick a screenshot from the automaton cache. outputs a filename.
+  local IFS=$'\n'
+  local button
+  local first_loop=1
+  
+  find "$SCREENSHOTS_CACHE" -name '*.png' | sed 's+.*/++g' | while read filename ;do
+    #if first loop iteration, add a new screenshot button
+    if [ "$first_loop" == 1 ];then
+      echo "New screenshot
+Capture a new screenshot when clicked
+/home/pi/Desktop/project1/patterns/start-menu.png
+bash -c "\""kill "\$"YAD_PID; yadflags=(--center --separator='\n'); sleep 1; gui_capture_screenshot"\""
+FALSE
+New screenshot (7s delay)
+Capture a new screenshot 7 seconds after this is clicked
+/home/pi/Desktop/project1/patterns/start-menu.png
+bash -c "\""kill "\$"YAD_PID; yadflags=(--center --separator='\n'); sleep 7; gui_capture_screenshot"\""
+FALSE"
+      first_loop=0
+    fi
+    
+    #generate thumbnail for this screenshot if it somehow went missing
+    if [ ! -f "$THUMBNAILS_CACHE/$filename" ];then
+      generate_thumbnail "$filename" >/dev/null
+    fi
+    echo "$filename
+$(identify -ping -format '%wx%h PNG image' "$SCREENSHOTS_CACHE/$filename")
+$THUMBNAILS_CACHE/$filename
+bash -c "\""echo $filename; kill "\$"YAD_PID"\""
+FALSE"
+  done | yad "${yadflags[@]}" --maximized --icons --listen --item-width 0 --single-click --no-buttons --text="Choose a screenshot:"
+  button=$?
+  if [ $button != 0 ] && [ $button != 143 ];then
+    error "User exited gui_screenshot_picker"
+  fi
+}
+
+gui_pattern_picker() { #pick a pattern from the automaton cache. outputs a filename.
+  local IFS=$'\n'
+  local button
+  
+  find "$PATTERNS_DIR" -name '*.png' | sed 's+.*/++g' | while read filename ;do
+    #if first loop iteration, add a new screenshot button
+    
+    echo "$filename
+$(identify -ping -format '%wx%h PNG image' "$PATTERNS_DIR/$filename")
+$PATTERNS_DIR/$filename
+bash -c "\""echo $filename; kill "\$"YAD_PID"\""
+FALSE"
+  done | yad "${yadflags[@]}" --maximized --icons --listen --item-width 0 --single-click --no-buttons --text="Choose a pattern:"
+  button=$?
+  if [ $button != 0 ] && [ $button != 143 ];then
+    error "User exited gui_pattern_picker"
+  fi
+}
+
+gui_make_pattern() { #from the $1 screenshot filename, prompt user to crop it, name it if $2 is blank, and output that filename
+  local filename="$1"
+  local screenshot="$SCREENSHOTS_CACHE/$filename"
+  if [ ! -f "$screenshot" ];then
+    error "gui_make_pattern(): file '$screenshot' does not exist!"
+  fi
+  local final_filename="$2" #optional argument to skip the naming dialog (overwriting allowed)
+  
+  local region
+  region="$(gui_pick_region "$screenshot")" || return 1
+  crop_image "$screenshot" "$region" "$RAM_LOCATION/automaton-new-pattern.png" || return 1
+  
+  #now ask the user what to name the pattern
+  local button
+  local text="Choose a unique name for this pattern:"
+  while [ -z "$final_filename" ];do
+    final_filename="$(yad "${yadflags[@]}" --image="$RAM_LOCATION/automaton-new-pattern.png" --image-on-top \
+      --form --field="$text:LBL" "" \
+      --field='' "$(echo "$filename" | sed 's/\.png$//g')" --button=OK:0 | tail -n +2 ; exit ${PIPESTATUS[0]}).png"
+    button=$?
+    if [ $button != 0 ];then
+      error "User exited pattern naming dialog" #user cancelled the dialog
+    elif [ -f "$PATTERNS_DIR/$final_filename" ];then
+      text="That name is already taken."$'\n'"$text"
+      final_filename=''
+    elif [ "$final_filename" == '.png' ];then
+      text="Name cannot be left blank."$'\n'"$text"
+      final_filename=''
+    else
+      #user chose a valid unique filename
+      break
+    fi
+  done
+  
+  mv -f "$RAM_LOCATION/automaton-new-pattern.png" "$PATTERNS_DIR/$final_filename" || error "Failed to move pattern to $PATTERNS_DIR/$final_filename"
+  echo "$final_filename"
+}
+
+#botspot: user needs to choose these
+USERSCRIPT=~/Desktop/project1/project1.sh
+PATTERNS_DIR=~/Desktop/project1/patterns
+mkdir -p "$PATTERNS_DIR"
+
+AUTOMATON_CONFIG=~/.config/automaton
+SCREENSHOTS_CACHE="${AUTOMATON_CONFIG}/screenshots"
+THUMBNAILS_CACHE="${AUTOMATON_CONFIG}/thumbnails"
+mkdir -p "$SCREENSHOTS_CACHE" "$THUMBNAILS_CACHE" || error "Making cache folder failed, please review errors above"
+
+#this needs to be set because api is sourced before PATTERNS_DIR is set, the previous value is /locator_pipe
+locator_pipe="$AUTOMATON_CONFIG/locator_pipe"
+
+yadflags=(--center --separator='\n')
+
+mode="$1"
+mode=test-pattern-live
+case "$mode" in
+  old-screenshot-new-pattern)
+    #use an existing screenshot to make a new pattern from it
+    screenshot="$(gui_screenshot_picker)" || exit 1
+    pattern="$(gui_make_pattern "$screenshot")" || exit 1
+    ;;
+  old-screenshot-old-pattern)
+    #use an existing screenshot to re-select an existing pattern
+    pattern="$(gui_pattern_picker)" || exit 1
+    screenshot="$(gui_screenshot_picker)" || exit 1
+    gui_make_pattern "$screenshot" "$pattern" >/dev/null || exit 1
+    ;;
+  test-pattern-live)
+    #indicate in realtime if a pattern is seen on screen or not
+    pattern="$(gui_pattern_picker)" || exit 1
+    locator_start
+    while true;do
+      locate_pattern "$pattern"
+    done
+    ;;
+esac
+
+

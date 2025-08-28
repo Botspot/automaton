@@ -1,15 +1,19 @@
 #!/bin/bash
 
-#export all functions so they are reachible by bash subprocesses, such as in `timeout`
+#export all functions so they are reachable by bash subprocesses, such as in `timeout`
 set -a
 
 error() {
   echo -e "\e[91m$1\e[39m" 1>&2
-  if [ ${#FUNCNAME[@]} -gt 2 ];then #return 1 if running inside of another function (exits the function)
-    return 1
-  else #otherwise exit the running script, if not within a function
+  
+  #log FUNCNAME in bash -x output
+  echo "${FUNCNAME[*]}" >/dev/null
+  #return 1 if running inside of another function (exits the function)
+  #if [ ${#FUNCNAME[@]} -gt 2 ] && [ "${FUNCNAME[1]}" != source ];then
+    #return 1
+  #else #otherwise exit the running script, if not within a function
     exit 1
-  fi
+  #fi
 }
 
 warning() { #yellow text
@@ -30,7 +34,7 @@ status_green() { #announce the success of a major action
   echo -e "\e[92m$1\e[0m" 1>&2
 }
 
-wait_for_file_creation() { #wait for the $1 file to be created
+wait_for_file_creation() { #wait for the $1 file to be created, without using a loop
   if [ -z "$1" ];then
     error "wait_for_file_creation() requires a file argument"
   elif [ -e "$1" ];then
@@ -39,49 +43,41 @@ wait_for_file_creation() { #wait for the $1 file to be created
   inotifywait -e create "$(dirname "$1")" --include "$(basename "$1")" -q >/dev/null
 }
 
-select_point() { #select a single XY point on the screen, outputs "X,Y"
-  if [ "$XDG_SESSION_TYPE" == x11 ];then
-    xwininfo &>/dev/null #abusing this for point selection UX
-    xdotool getmouselocation | awk '{print $1":"$2}' | awk -F':' '{print $2","$4}'
-  elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    slurp -p | awk '{print $1}'
-  fi
-}
-
-select_rectangle() { #select a rectangular region on the screen, outputs "X,Y WxH"
-  if [ "$XDG_SESSION_TYPE" == x11 ];then
-    slop -t 0 | awk -F'+' '{print $2","$3" "$1}' #awk rearranges the params so the output matches that of slurp
-  elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    slurp
-  fi
-}
-
-screenshot_rectangle() { #take a screenshot of the $1 rectangular region of the screen (X,Y WxH), save it to $2 png file
-  if [[ "$1" != *','*' '*'x'* ]];then
-    error "screenshot_rectangle(): first argument must be in the format 'X,Y WxH'"
-  elif [[ "$2" != '/'* ]];then
-    error "screenshot_rectangle(): second argument must be a filepath"
-  fi
-  
-  if [ "$XDG_SESSION_TYPE" == x11 ];then
-    scrot --autoselect "$(echo "$1" | tr ' x' ',')" -zoF "$2"
-  elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    grim -g "$1" "$2"
-  fi
-  [ $? == 0 ] || error "screenshot_rectangle(): failed, please review errors above"
-}
-
 screenshot_fullscreen() { #take a screenshot of the full screen, save it to $1 png file
   if [[ "$1" != '/'* ]];then
-    error "screenshot_fullscreen(): first argument must be a filepath"
+    error "screenshot_fullscreen(): first argument must be a PNG filepath"
   fi
   
   if [ "$XDG_SESSION_TYPE" == x11 ];then
-    scrot -zoF "$1"
+    scrot -zoF "$1" || error "screenshot_fullscreen(): failed, please review errors above"
   elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    grim "$1"
+    grim "$1" || error "screenshot_fullscreen(): failed, please review errors above"
   fi
-  [ $? == 0 ] || error "screenshot_fullscreen(): failed, please review errors above"
+}
+
+crop_image() { #given a $1 png image, crop it to $2 rectangle coordinates (X,Y +W+H), and save to "$3"
+  local inputfile="$1"
+  local cropregion="$2"
+  local outputfile="$3"
+  
+  if [ -z "$inputfile" ] || [ -z "$cropregion" ] || [ -z "$outputfile" ];then
+    error "crop_image(): arguments required. [path to png image] [rectangle coordinates in the format 'X,Y +W+H']"
+  elif [ ! -f "$inputfile" ];then
+    error "crop_image(): input file '$inputfile' does not exist"
+  fi
+  
+  #handle cases where we overwrite the original file
+  local convert_destination="$outputfile"
+  if [ "$inputfile" == "$outputfile" ];then
+    convert_destination="$RAM_LOCATION/automaton-${inputfile//\//-}.png"
+  fi
+  #crop the image, using imagemagick's preferred crop format syntax
+  convert "$inputfile" -crop "$(echo "$cropregion" | tr -d ' ' | tr ',+' ' ' | awk '{print $3"x"$4"+"$1"+"$2}')" +repage "$convert_destination" || error "Failed to crop image '$inputfile', please review errors above"
+  
+  #handle cases where we overwrite the original file - now overwrite it
+  if [ "$inputfile" == "$outputfile" ];then
+    mv -f "$convert_destination" "$outputfile" || error "Failed to overwrite '$outputfile'"
+  fi
 }
 
 locator_start() { #start python opencv process that waits for targets on screen to find
@@ -102,8 +98,8 @@ locator_stop() {
 }
 
 locate_pattern() { #locate where on the screen the specified target is. (X,Y) No output if not found.
-  #pattern name to look for (assumed to be saved in project folder)
-  local pattern="$PATTERNS_DIR/$1.png"
+  #pattern filename to look for (assumed to be saved in project folder)
+  local pattern="$PATTERNS_DIR/$1"
   [ -f "$pattern" ] || error "locate_pattern(): screenshot png file at '$pattern' not found!"
   [ -p "$locator_pipe" ] || error "locate_pattern(): locator_start must be run first! ($locator_pipe does not exist)"
   
@@ -130,20 +126,21 @@ locate_pattern() { #locate where on the screen the specified target is. (X,Y) No
   #response is sent back through the pipe, this will wait for it
   
   local location
-  if read location <"${locator_pipe}.out" ;then #read blocks until something is in the output pipe
+  local IFS=' '
+  if read location similarity <"${locator_pipe}.out" 2>/dev/null ;then #read blocks until something is in the output pipe
     #read returns code 0 if [ ! -z "$location" ]
     rm -f "$screenshot"
     if [ ! -z "$offset" ];then
       #if no offset given, output coordinates of top-left corner of pattern found
       #otherwise, apply the offset before outputting it
-      local x_location="$(echo "$location" | awk '{print $1}' | awk -F, '{print $1}')"
-      local y_location="$(echo "$location" | awk '{print $1}' | awk -F, '{print $2}')"
+      local x_location="$(echo "$location" | awk -F, '{print $1}')"
+      local y_location="$(echo "$location" | awk -F, '{print $2}')"
       local x_offset="$(echo "$offset" | awk -F + '{print $2}')"
       local y_offset="$(echo "$offset" | awk -F + '{print $3}')"
       location=$((x_location+x_offset)),$((y_location+y_offset))
     fi
-    echo "$location"
-    status_green "Found pattern '$1' at $location"
+    echo "$location $similarity"
+    status_green "'$1' found at $location - $similarity"
   else
     #read returns code 1 if it received nothing (pattern not found)
     rm -f "$screenshot"
@@ -153,7 +150,8 @@ locate_pattern() { #locate where on the screen the specified target is. (X,Y) No
       #avoid spamming, while allowing other error messages to go unhindered
       return 1
     else
-      error "locate_pattern(): failed to find '$1' on screen."
+      #run in parenthesis so it acts as return 1, not exit 1
+      (error "locate_pattern(): failed to find '$1' on screen.")
     fi
   fi
 }
@@ -337,7 +335,7 @@ nested_display_start() { #start a nested x or wayland display (must be specified
 }
 
 nested_display_stop() {
-  kill $nested_display_pid 2>/dev/null
+  kill $nested_display_pid 2>/dev/null || true
   export DISPLAY="$original_DISPLAY"
   export WAYLAND_DISPLAY="$original_WAYLAND_DISPLAY"
   export XDG_SESSION_TYPE="$original_XDG_SESSION_TYPE"
@@ -346,19 +344,19 @@ nested_display_stop() {
 #set variables
 if [ -z "$PATTERNS_DIR" ] && [ -z "$AUTOMATON_DIR" ];then
   error "api: PATTERNS_DIR and AUTOMATON_DIR must be set by the script that sources api"
-elif [ ! -d "$PATTERNS_DIR" ];then
-  error "api: PATTERNS_DIR does not seem to be set correctly. ($PATTERNS_DIR does not exist)" 
+elif [ ! -d "$PATTERNS_DIR" ] && [[ "$0" != */gui ]];then
+  error "api: PATTERNS_DIR does not seem to be set correctly. ('$PATTERNS_DIR' does not exist)"
 elif [ ! -f "$AUTOMATON_DIR/api" ];then
-  error "api: AUTOMATON_DIR does not seem to be set correctly. ($AUTOMATON_DIR/api does not exist)" 
+  error "api: AUTOMATON_DIR does not seem to be set correctly. ($AUTOMATON_DIR/api does not exist)"
 fi
 if [ -d /dev/shm ];then
   RAM_LOCATION=/dev/shm
 else
   RAM_LOCATION=/tmp
 fi
-#other variables that we want to modify later within functions and want global:
+#other variables that we want global to modify later within functions:
 nested_display_pid=''
-#keep original values to these variables so that 
+#keep original values to these variables for nested_display_stop()
 original_DISPLAY="$DISPLAY"
 original_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"
 original_XDG_SESSION_TYPE="$XDG_SESSION_TYPE"
@@ -372,11 +370,17 @@ fi
 if [ ! -d /usr/share/doc/python3-numpy ];then
   install_list+=('python3-numpy')
 fi
+if [ ! -d /usr/share/doc/python3-pygame-sdl2 ];then
+  install_list+=('python3-pygame-sdl2')
+fi
 if ! command -v inotifywait >/dev/null ;then
   install_list+=('inotify-tools')
 fi
 if ! command -v identify >/dev/null ;then
   install_list+=('imagemagick-6.q16')
+fi
+if ! command -v yad >/dev/null ;then
+  install_list+=('yad')
 fi
 
 #nested display tools: if you do not plan to use nested_display function, set SKIP_INSTALLING_NESTED_DEPS=1 to avoid installing these
@@ -397,14 +401,8 @@ fi
 
 #X11 or Wayland have different dependencies
 if [ "$XDG_SESSION_TYPE" == x11 ];then #these dependencies are required only on distros that are X11
-  if ! command -v xwininfo >/dev/null ;then
-    install_list+=('x11-utils')
-  fi
   if ! command -v xdotool >/dev/null ;then
     install_list+=('xdotool')
-  fi
-  if ! command -v slop >/dev/null ;then
-    install_list+=('slop')
   fi
   if ! command -v scrot >/dev/null ;then
     install_list+=('scrot')
@@ -413,16 +411,13 @@ if [ "$XDG_SESSION_TYPE" == x11 ];then #these dependencies are required only on 
     install_list+=('xclip')
   fi
 elif [ "$XDG_SESSION_TYPE" == wayland ];then #these dependencies are required only on distros that are Wayland
-  if ! command -v slurp >/dev/null ;then
-    install_list+=('slurp')
-  fi
-  if ! command -v grim >/dev/null ;then
-    install_list+=('grim')
-  fi
   #for compiling wlrctl
   if ! command -v wlrctl >/dev/null ;then
     need_to_compile_wlrctl=yes
     install_list+=('cmake' 'libxkbcommon-dev' 'libwayland-dev')
+  fi
+  if ! command -v grim >/dev/null ;then
+    install_list+=('grim')
   fi
   if ! command -v wl-copy >/dev/null ;then
     install_list+=('wl-clipboard')
