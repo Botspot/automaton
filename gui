@@ -45,6 +45,10 @@ rename_screenshot() { #rename $1 filename to $2
   mv -f "$THUMBNAILS_CACHE/$filename" "$THUMBNAILS_CACHE/$destination"
 }
 
+remove_screenshot() { #delete the $1 screenshot
+  rm -f "$SCREENSHOTS_CACHE/$1" "$THUMBNAILS_CACHE/$1"
+}
+
 gui_capture_screenshot() { #take a fullscreen screenshot, name it, save to cache, save thumbnail, echo filename
   local date="$(date +"%Y-%m-%d %X")"
   screenshot_fullscreen "$SCREENSHOTS_CACHE/$date.png"
@@ -56,10 +60,11 @@ gui_capture_screenshot() { #take a fullscreen screenshot, name it, save to cache
   while true;do
     final_filename="$(yad "${yadflags[@]}" --image="$THUMBNAILS_CACHE/$date.png" --image-on-top \
       --form --field="$text:LBL" "" \
-      --field='' "$date" --button=OK:0)"
+      --field='' "$date" --button=Cancel:1 --button=OK:0)"
     button=$?
     final_filename="$(echo "$final_filename" | tail -n +2).png"
     if [ $button != 0 ];then
+      remove_screenshot "$date.png"
       error "User exited screenshot naming dialog" #user cancelled the dialog
     elif [ "$final_filename" == "$date.png" ];then
       #user did not rename the file, so leave it as-is
@@ -83,21 +88,18 @@ gui_screenshot_picker() { #pick a screenshot from the automaton cache. outputs a
   local button
   local first_loop=1
   
-  find "$SCREENSHOTS_CACHE" -name '*.png' | sed 's+.*/++g' | while read filename ;do
-    #if first loop iteration, add a new screenshot button
-    if [ "$first_loop" == 1 ];then
-      echo "New screenshot
+  #add a new screenshot buttons before looping through existing screenshots
+  (echo "New screenshot
 Capture a new screenshot when clicked
-/home/pi/Desktop/project1/patterns/start-menu.png
-bash -c "\""kill "\$"YAD_PID; yadflags=(--center --separator='\n'); sleep 1; gui_capture_screenshot"\""
+${AUTOMATON_DIR}/icons/new-screenshot.png
+bash -c "\""kill "\$"YAD_PID; yadflags=(--title=Automaton --class=automaton --name=automaton --center --separator='\n'); sleep 1; gui_capture_screenshot"\""
 FALSE
-New screenshot (7s delay)
-Capture a new screenshot 7 seconds after this is clicked
-/home/pi/Desktop/project1/patterns/start-menu.png
-bash -c "\""kill "\$"YAD_PID; yadflags=(--center --separator='\n'); sleep 7; gui_capture_screenshot"\""
+New screenshot (5s delay)
+Capture a new screenshot 5 seconds after clicking this
+${AUTOMATON_DIR}/icons/new-screenshot.png
+bash -c "\""kill "\$"YAD_PID; yadflags=(--title=Automaton --class=automaton --name=automaton --center --separator='\n'); sleep 5; gui_capture_screenshot"\""
 FALSE"
-      first_loop=0
-    fi
+  find "$SCREENSHOTS_CACHE" -name '*.png' | sort | sed 's+.*/++g' | while read filename ;do
     
     #generate thumbnail for this screenshot if it somehow went missing
     if [ ! -f "$THUMBNAILS_CACHE/$filename" ];then
@@ -108,36 +110,46 @@ $(identify -ping -format '%wx%h PNG image' "$SCREENSHOTS_CACHE/$filename")
 $THUMBNAILS_CACHE/$filename
 bash -c "\""echo $filename; kill "\$"YAD_PID"\""
 FALSE"
-  done | yad "${yadflags[@]}" --maximized --icons --listen --item-width 0 --single-click --no-buttons --text="Choose a screenshot:"
+  done) | yad "${yadflags[@]}" --maximized --icons --listen --item-width 100 --single-click --no-buttons --text="Choose a screenshot:"
   button=$?
   if [ $button != 0 ] && [ $button != 143 ];then
     error "User exited gui_screenshot_picker"
   fi
 }
 
-gui_pattern_picker() { #pick a pattern from the automaton cache. outputs a filename.
+gui_pattern_picker() { #pick a pattern from this project's PATTERNS_DIR. outputs a filename.
   local IFS=$'\n'
   local button
+  local first_loop=1
   
-  find "$PATTERNS_DIR" -name '*.png' | sed 's+.*/++g' | while read filename ;do
-    #if first loop iteration, add a new screenshot button
+  #add a new pattern button before looping through existing patterns
+  (echo "New pattern from screenshot
+Crop a region from a screenshot to make a new pattern
+${AUTOMATON_DIR}/icons/new-pattern.png
+bash -c 'kill "\$"YAD_PID; yadflags=(--center --separator="\""\n"\""); gui_make_pattern "\"\$"(gui_screenshot_picker)"\""'
+FALSE"
+  find "$PATTERNS_DIR" -name '*.png' | sort | sed 's+.*/++g' | while read filename ;do
+    #if first loop iteration, add a new pattern button
     
     echo "$filename
 $(identify -ping -format '%wx%h PNG image' "$PATTERNS_DIR/$filename")
 $PATTERNS_DIR/$filename
 bash -c "\""echo $filename; kill "\$"YAD_PID"\""
 FALSE"
-  done | yad "${yadflags[@]}" --maximized --icons --listen --item-width 0 --single-click --no-buttons --text="Choose a pattern:"
+  done) | yad "${yadflags[@]}" --maximized --icons --listen --item-width 100 --single-click --no-buttons --text="Choose a pattern:"
   button=$?
   if [ $button != 0 ] && [ $button != 143 ];then
     error "User exited gui_pattern_picker"
   fi
+  error 'got here'
 }
 
 gui_make_pattern() { #from the $1 screenshot filename, prompt user to crop it, name it if $2 is blank, and output that filename
   local filename="$1"
   local screenshot="$SCREENSHOTS_CACHE/$filename"
-  if [ ! -f "$screenshot" ];then
+  if [ -z "$filename" ];then
+    error "gui_make_pattern(): needs a screenshot filename to do anything"
+  elif [ ! -f "$screenshot" ];then
     error "gui_make_pattern(): file '$screenshot' does not exist!"
   fi
   local final_filename="$2" #optional argument to skip the naming dialog (overwriting allowed)
@@ -172,6 +184,78 @@ gui_make_pattern() { #from the $1 screenshot filename, prompt user to crop it, n
   echo "$final_filename"
 }
 
+gui_test_pattern_live() { #indicate in real-time if pattern $1 is seen on screen or not.
+  #pattern="$(gui_pattern_picker)" || exit 1
+  local pattern="$1"
+  local offset="$2"
+  [ -z "$offset" ] && offset='+0+0'
+  
+  locator_start
+  
+  local IFS=' '
+  local history=''
+  while true;do
+    if output="$(locate_pattern "$pattern" "$offset")" ;then
+      read coordinates similarity <<<"$output"
+      similarity="$(echo "$similarity" | tr -cd '0123456789')"
+      found='✅ Yes'
+      history="▰$history"
+    else
+      found='❌ No'
+      coordinates=' '
+      similarity='0'
+      history="▱$history"
+    fi
+    
+    #truncate length of history
+    history="${history:0:40}"
+    
+    echo "coordinates: $coordinates similarity $similarity" 1>&2
+    #refresh the yad window with these new values
+    echo "$history
+$found
+$coordinates
+$similarity
+bash -c 'mouse_move $coordinates'"
+    
+  done | yad "${yadflags[@]}" --width=400 --text="Watching screen for pattern: <u><b>$pattern</b></u>" \
+    --form --focus-field=3 --cycle-read --button=Close:0 \
+    --field='Past results::RO' --field='Pattern found?:RO' --field=Coordinates: \
+    --field='Similarity::SCL' --field='Move mouse to pattern':FBTN
+}
+
+text_editor() { #Open user-preferred text editor. $1 is file to open (function adapted from Pi-Apps)
+  [ -z "$1" ] && error "text_editor(): no file specified"
+  
+  #find the best text editor
+  local preferrededitor="$(cat "$AUTOMATON_CONFIG/text-editor" 2>/dev/null || echo geany)"
+  # map friendly name of editors to binary name
+  if [ "$preferrededitor" == "Visual Studio Code" ];then
+    preferrededitor="code"
+  elif [ "$preferrededitor" == "VSCodium" ];then
+    preferrededitor="codium"
+  fi
+  
+  #change preferred editor if user-default doesn't exist
+  if ! command -v "$preferrededitor" >/dev/null;then
+    preferrededitor=geany
+  fi
+  if ! command -v "$preferrededitor" >/dev/null;then
+    preferrededitor=mousepad
+  fi
+  if ! command -v "$preferrededitor" >/dev/null;then
+    preferrededitor=leafpad
+  fi
+  if ! command -v "$preferrededitor" >/dev/null;then
+    local errormessage="text_editor(): could not detect any installed text editing programs on your system! Please install something like leafpad, mousepad, or geany. If you have a favorite text editor that is not detected, open an issue and it can be added to the list."
+    yad --text="$errormessage" --button=OK:0
+    error "$errormessage"
+  fi
+  
+  #non-terminal text editor
+  "$preferrededitor" "$1" &
+}
+
 #botspot: user needs to choose these
 USERSCRIPT=~/Desktop/project1/project1.sh
 PATTERNS_DIR=~/Desktop/project1/patterns
@@ -182,33 +266,184 @@ SCREENSHOTS_CACHE="${AUTOMATON_CONFIG}/screenshots"
 THUMBNAILS_CACHE="${AUTOMATON_CONFIG}/thumbnails"
 mkdir -p "$SCREENSHOTS_CACHE" "$THUMBNAILS_CACHE" || error "Making cache folder failed, please review errors above"
 
-#this needs to be set because api is sourced before PATTERNS_DIR is set, the previous value is /locator_pipe
+#this needs to be set because api is sourced before PATTERNS_DIR is set, making the previous value /locator_pipe
 locator_pipe="$AUTOMATON_CONFIG/locator_pipe"
 
-yadflags=(--center --separator='\n')
+yadflags=(--title=Automaton --class=automaton --name=automaton --center --separator='\n')
 
 mode="$1"
-mode=test-pattern-live
+mode=choose-project
+while true;do
 case "$mode" in
-  old-screenshot-new-pattern)
+  choose-project) #project creation, selection, and onboarding
+    
+    #recall previous choices using a 2-line config file
+    current_project_config_file="$AUTOMATON_CONFIG/current-project"
+    if [ -f "$current_project_config_file" ];then
+      USERSCRIPT="$(sed -n 1p "$current_project_config_file")"
+      PATTERNS_DIR="$(sed -n 2p "$current_project_config_file")"
+      if [ ! -f "$USERSCRIPT" ];then
+        USERSCRIPT=''
+      fi
+      if [ ! -d "$PATTERNS_DIR" ];then
+        PATTERNS_DIR=''
+      fi
+    fi
+    
+    interpret_patterns_dir_from_script() { #read the specified automaton script and try to find the path to the PATTERNS_DIR it is using. Output: folder path, and exit code 1 if it does not exist
+      [ ! -f "$1" ] && error "interpret_patterns_dir_from_script(): script '$1' not found"
+      local PATTERNS_DIR="$(grep -m1 -o 'PATTERNS_DIR=.*' "$1" | sed 's/#.*//g ; s+~/+'$HOME'+g ; s+$HOME+'$HOME'+g ; s/^PATTERNS_DIR=//g ; s/^"//g ; s/"$//g')"
+      echo "$PATTERNS_DIR" #send the interpreted PATTERNS_DIR to stdout
+      [ -d "$PATTERNS_DIR" ] #return code 0 if found, otherwise return 1
+    }
+    
+    yad_new_project_wizard() { #just for choose-project mode, this returns paths to script and patterns folders
+      yadflags=(--title=Automaton --class=automaton --name=automaton --center --separator='\n')
+      text="This <b>script</b> will perform automated tasks of your choosing. Choose a good place to save it."
+      while true;do
+        USERSCRIPT="$(cd $HOME/Documents; yad "${yadflags[@]}" --maximized --text="$text" --file --save \
+          --filename=project1.sh --file-filter="Bash script | *.sh" \
+          --confirm-overwrite="If you proceed with this file, its contents will be replaced with a few lines of template code. Are you sure?")"
+        button=$?
+        if [ "$button" != 0 ];then
+          error "user exited project script naming dialog"
+        elif [[ "$USERSCRIPT" != *'.sh' ]];then
+          text+=$'\n'"Project script must end in .sh"
+        else
+          break
+        fi
+      done
+      text="<b>Patterns</b> are small pictures that tell the script what to find on the screen. Choose a folder to store them."
+      while true;do
+        PATTERNS_DIR="$(cd "$(dirname "$USERSCRIPT")"; yad "${yadflags[@]}" --maximized --text="$text" --filename="$(basename "$USERSCRIPT" | sed 's/\.sh$/-patterns/g')" --file --directory --save)"
+        button=$?
+        if [ "$button" != 0 ];then
+          error "user exited project folder naming dialog"
+        else
+          break
+        fi
+      done
+      #send these values to yad's form fields
+      echo "3:$USERSCRIPT" | sed "s+$HOME+~+g"
+      echo "4:$PATTERNS_DIR" | sed "s+$HOME+~+g"
+    }
+    yad_existing_project_wizard() { #just for choose-project mode, this returns paths to script and patterns folders
+      yadflags=(--title=Automaton --class=automaton --name=automaton --center --separator='\n')
+      text="Choose a previously created Automaton script."
+      while true;do
+        USERSCRIPT="$(cd $HOME/Documents; yad "${yadflags[@]}" --maximized --text="$text" --file \
+          --filename=project1.sh --file-filter="Bash scripts | *.sh")"
+        button=$?
+        if [ "$button" != 0 ];then
+          error "user exited project script choosing dialog"
+        elif ! grep -q 'PATTERNS_DIR=' "$USERSCRIPT" ;then
+          yad "${yadflags[@]}" --text="<u>$USERSCRIPT</u>"$'\n'"That file does not mention 'PATTERNS_DIR=' anywhere. All Automaton projects must clearly reference the folder for storing patterns."$'\n'"Please fix the file or choose a different one." --button=OK
+          error "That file does not mention 'PATTERNS_DIR=' anywhere."
+        else
+          
+          if PATTERNS_DIR="$(interpret_patterns_dir_from_script "$USERSCRIPT")" ;then
+            #script interpreted successfully, choose this PATTERNS_DIR
+            break
+          else
+            yad "${yadflags[@]}" --text="Failed to interpret the the PATTERNS_DIR= line in the script. This folder does not exist: <u>${PATTERNS_DIR}</u>"$'\n'"Please fix the file or choose a different one."
+            error "Failed to interpret the the PATTERNS_DIR= line in the script. This folder does not exist: '${PATTERNS_DIR}'"
+          fi
+          
+        fi
+      done
+      #send these values to yad's form fields
+      echo "3:$USERSCRIPT" | sed "s+$HOME+~+g"
+      echo "4:$PATTERNS_DIR" | sed "s+$HOME+~+g"
+    }
+    
+    output="$(yad "${yadflags[@]}" --width=400 --form \
+      --field='New Automaton project':FBTN "@bash -c 'yad_new_project_wizard'" \
+      --field='Open existing project':FBTN "@bash -c 'yad_existing_project_wizard'" \
+      --field='Script::RO' "$(echo "$USERSCRIPT" | sed "s+$HOME+~+g")" \
+      --field='Patterns Folder::RO' "$(echo "$PATTERNS_DIR" | sed "s+$HOME+~+g")" \
+      --button=Next:0)"
+    USERSCRIPT="$(echo "$output" | sed -n 3p | sed "s+~+$HOME+g")"
+    PATTERNS_DIR="$(echo "$output" | sed -n 4p | sed "s+~+$HOME+g")"
+    
+    #save new values to config file for next time
+    echo "$USERSCRIPT"$'\n'"$PATTERNS_DIR" > "$current_project_config_file"
+    
+    #initialize script if necessary
+    if [ ! -f "$USERSCRIPT" ] || ! interpret_patterns_dir_from_script "$USERSCRIPT" >/dev/null ;then
+      #script invalid or does not exist, so make it
+      if [ -f "$USERSCRIPT" ] && [ ! -f "$USERSCRIPT.bak" ];then
+        #if it exists already, then move to backup location
+        status "Saving a backup of pre-existing script '$USERSCRIPT' to '$USERSCRIPT.bak'..."
+        mv -f "$USERSCRIPT" "$USERSCRIPT.bak"
+      fi
+      rm -f "$USERSCRIPT" || error "Failed to first remove '$USERSCRIPT'"
+      echo "#!/bin/bash
+
+#exit this script on any errors
+set -e
+
+#folder that contains the patterns to be used by this script
+PATTERNS_DIR=$(echo '"'"$PATTERNS_DIR"'"' | sed "s+"\""$HOME+"\"\$"HOME+g")
+
+#get access to automaton's bash functions, including locate_pattern and mouse_move
+AUTOMATON_DIR=$(echo '"'"$AUTOMATON_DIR"'"' | sed "s+"\""$HOME+"\"\$"HOME+g")
+source "\"\$"AUTOMATON_DIR/api"\""
+
+#this starts the pattern locator service. Comment this out if you don't use locate_pattern.
+locator_start
+
+#Your code begins below this line. Happy automating! -Botspot" > "$USERSCRIPT"
+      #make the script executable
+      chmod +x "$USERSCRIPT"
+      #make the patterns directory
+      mkdir -p "$PATTERNS_DIR"
+    fi
+    #set the next mode to use after this
+    mode=userscript-editor
+    ;;
+  userscript-editor) #main gui where the user sets up their script
+    if [ ! -f "$USERSCRIPT" ] || [ ! -d "$PATTERNS_DIR" ];then
+      error "userscript-editor mode requires valid values for USERSCRIPT and PATTERNS_DIR."
+    fi
+    
+    #open the userscript in a text editor
+    text_editor "$USERSCRIPT" || exit 1
+    yad "${yadflags[@]}" --width=400 --height=500 --form --scroll \
+      --button="Manage Patterns":true \
+      --button="Run Script":true \
+      --text="Build your script. This helps make short code snippets that drop into your script." \
+      --field="<big>Patterns</big> (stuff to find on the screen)":LBL '' \
+      --field="Wait for a pattern to appear":FBTN '' \
+      --field="Wait for a pattern, then click it":FBTN '' \
+      --field="If a pattern is already there, click it":FBTN '' \
+      --field="Given 2 patterns, which one is on screen?":FBTN '' \
+      --field="<big>SubScreens</big> (a virtual screen keeps things tidy)":LBL '' \
+      --field="Wayland subscreen (visible)":FBTN '' \
+      --field="Wayland subscreen (invisible)":FBTN '' \
+      --field="X11 subscreen (visible)":FBTN '' \
+      --field="X11 subscreen (invisible)":FBTN '' \
+      --field="Stop a running subscreen":FBTN '' \
+      --field="<big>Assistance and debugging</big>":LBL '' \
+      --field="Ask AI for scripting help":FBTN 'x-www-browser https://duckduckgo.com/?q=DuckDuckGo+AI+Chat&ia=chat&duckai=1' \
+      --field="Check script for syntax errors":FBTN '' \
+      --field="Run script in debug mode (bash -x)":FBTN ''
+    exit 0
+    ;;
+  make-new-pattern)
     #use an existing screenshot to make a new pattern from it
     screenshot="$(gui_screenshot_picker)" || exit 1
     pattern="$(gui_make_pattern "$screenshot")" || exit 1
     ;;
-  old-screenshot-old-pattern)
-    #use an existing screenshot to re-select an existing pattern
+  make-old-pattern)
+    #re-select an existing pattern
     pattern="$(gui_pattern_picker)" || exit 1
     screenshot="$(gui_screenshot_picker)" || exit 1
     gui_make_pattern "$screenshot" "$pattern" >/dev/null || exit 1
     ;;
   test-pattern-live)
-    #indicate in realtime if a pattern is seen on screen or not
-    pattern="$(gui_pattern_picker)" || exit 1
-    locator_start
-    while true;do
-      locate_pattern "$pattern"
-    done
+    gui_test_pattern_live geany-newfile.png
     ;;
+  
 esac
-
+done
 
