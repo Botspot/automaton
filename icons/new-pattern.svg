@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" xmlns:bx="https://boxy-svg.com">
+  <defs>
+    <bx:export>
+      <bx:file format="png" path="new-pattern.png"/>
+    </bx:export>
+    <filter id="drop-shadow-filter-0" bx:preset="drop-shadow 1 0 0 9 0.25 #fff" color-interpolation-filters="sRGB" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="9"/>
+      <feOffset dx="0" dy="0"/>
+      <feComponentTransfer result="offsetblur">
+        <feFuncA id="spread-ctrl" type="linear" slope="0.5"/>
+      </feComponentTransfer>
+      <feFlood flood-color="#fff"/>
+      <feComposite in2="offsetblur" operator="in"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="clip-0">
+      <path d="M 100 12.648 L 100 87.352 C 100 94.338 94.338 100 87.352 100 L 12.648 100 C 5.663 100 0 94.338 0 87.352 L 0 12.648 C 0 5.663 5.663 0 12.648 0 L 87.352 0 C 94.338 0 100 5.663 100 12.648 Z" style="fill: rgb(60, 110, 54);"/>
+    </clipPath>
+    <filter id="point-light-filter-0" bx:preset="point-light 1 0.5 0.5 0.5 70 0.62 0.2 1 #ffffff" primitiveUnits="objectBoundingBox" color-interpolation-filters="sRGB" x="-50%" y="-50%" width="200%" height="200%">
+      <feSpecularLighting result="specular-lighting" lighting-color="#ffffff" specularConstant="0.62" specularExponent="70">
+        <fePointLight x="0.5" y="0.5" z="0.5"/>
+      </feSpecularLighting>
+      <feDiffuseLighting result="diffuse-lighting" lighting-color="#ffffff" diffuseConstant="0.2">
+        <fePointLight x="0.5" y="0.5" z="0.5"/>
+      </feDiffuseLighting>
+      <feMerge result="lighting">
+        <feMergeNode in="diffuse-lighting"/>
+        <feMergeNode in="specular-lighting"/>
+      </feMerge>
+      <feComposite in="SourceGraphic" in2="lighting" operator="arithmetic" k1="1" k2="1" k3="0" k4="0"/>
+    </filter>
+  </defs>
+  <rect x="-159.74" y="-62.016" width="519.47" height="324.031" style="stroke: rgb(0, 0, 0); visibility: hidden;"/>
+  <circle style="fill: rgb(31, 158, 255); filter: url(&quot;#point-light-filter-0&quot;);" cx="50" cy="50" r="32.563"/>
+  <path d="M 74.366 48.469 L 74.366 51.531 C 74.366 53.504 72.767 55.103 70.794 55.103 L 55.103 55.103 L 55.103 70.794 C 55.103 72.767 53.504 74.366 51.531 74.366 L 48.47 74.366 C 46.497 74.366 44.898 72.767 44.898 70.794 L 44.898 55.103 L 29.206 55.103 C 27.233 55.103 25.634 53.504 25.634 51.531 L 25.634 48.469 C 25.634 46.496 27.233 44.897 29.206 44.897 L 44.898 44.897 L 44.898 29.206 C 44.898 27.233 46.497 25.634 48.47 25.634 L 51.531 25.634 C 53.504 25.634 55.103 27.233 55.103 29.206 L 55.103 44.897 L 70.794 44.897 C 72.767 44.897 74.366 46.496 74.366 48.469 Z" style="fill: rgb(255, 255, 255);"/>
+  <path d="M -79.87 -31.008 L 179.865 -31.008 L 179.865 131.008 L -79.87 131.008 L -79.87 -31.008 Z M 87.352 0 L 12.648 0 C 5.663 0 0 5.663 0 12.648 L 0 87.352 C 0 94.338 5.663 100 12.648 100 L 87.352 100 C 94.338 100 100 94.338 100 87.352 L 100 12.648 C 100 5.663 94.338 0 87.352 0 Z" style="filter: url(&quot;#drop-shadow-filter-0&quot;); clip-path: url(&quot;#clip-0&quot;); stroke-width: 5px; stroke: rgb(31, 158, 255);"/>
+</svg>

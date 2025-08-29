@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 270" xmlns:bx="https://boxy-svg.com">
+  <defs>
+    <bx:export>
+      <bx:file format="png" path="new-screenshot.png"/>
+    </bx:export>
+    <filter id="drop-shadow-filter-0" bx:preset="drop-shadow 1 0 0 25 0.71 #fff" color-interpolation-filters="sRGB" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="25"/>
+      <feOffset dx="0" dy="0"/>
+      <feComponentTransfer result="offsetblur">
+        <feFuncA id="spread-ctrl" type="linear" slope="1.42"/>
+      </feComponentTransfer>
+      <feFlood flood-color="#fff"/>
+      <feComposite in2="offsetblur" operator="in"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="clip-0">
+      <path d="M 35.72 2.593 L 444.281 2.593 C 452.299 2.68 459.941 6.011 465.18 11.249 C 470.418 16.488 473.749 24.13 473.836 32.148 L 473.836 237.853 C 473.749 245.871 470.418 253.513 465.18 258.752 C 459.941 263.99 452.299 267.321 444.281 267.408 L 35.72 267.408 C 27.702 267.321 20.06 263.99 14.821 258.752 C 9.583 253.513 6.252 245.871 6.165 237.853 L 6.165 32.148 C 6.252 24.13 9.583 16.488 14.821 11.249 C 20.06 6.011 27.702 2.68 35.72 2.593 Z" style="stroke-width: 4px; filter: none; fill: rgb(155, 81, 81);"/>
+    </clipPath>
+    <filter id="point-light-filter-0" bx:preset="point-light 1 0.5 0.5 0.5 42 0.9 0.01 1 #ffffff" primitiveUnits="objectBoundingBox" color-interpolation-filters="sRGB" x="-50%" y="-50%" width="200%" height="200%">
+      <feSpecularLighting result="specular-lighting" lighting-color="#ffffff" specularConstant="0.9" specularExponent="42">
+        <fePointLight x="0.5" y="0.5" z="0.5"/>
+      </feSpecularLighting>
+      <feDiffuseLighting result="diffuse-lighting" lighting-color="#ffffff" diffuseConstant="0.01">
+        <fePointLight x="0.5" y="0.5" z="0.5"/>
+      </feDiffuseLighting>
+      <feMerge result="lighting">
+        <feMergeNode in="diffuse-lighting"/>
+        <feMergeNode in="specular-lighting"/>
+      </feMerge>
+      <feComposite in="SourceGraphic" in2="lighting" operator="arithmetic" k1="1" k2="1" k3="0" k4="0"/>
+    </filter>
+  </defs>
+  <rect x="-27.488" y="-22.35" width="519.47" height="324.031" style="stroke: rgb(0, 0, 0); visibility: hidden;"/>
+  <circle style="fill: rgb(31, 158, 255); filter: url(&quot;#point-light-filter-0&quot;);" cx="240" cy="135" r="65.125"/>
+  <path d="M 288.732 131.938 L 288.732 138.061 C 288.732 142.007 285.534 145.205 281.588 145.205 L 250.206 145.205 L 250.206 176.588 C 250.206 180.533 247.007 183.732 243.062 183.732 L 236.939 183.732 C 232.993 183.732 229.795 180.533 229.795 176.588 L 229.795 145.205 L 198.412 145.205 C 194.466 145.205 191.268 142.007 191.268 138.061 L 191.268 131.938 C 191.268 127.992 194.466 124.794 198.412 124.794 L 229.795 124.794 L 229.795 93.412 C 229.795 89.466 232.993 86.268 236.939 86.268 L 243.062 86.268 C 247.007 86.268 250.206 89.466 250.206 93.412 L 250.206 124.794 L 281.588 124.794 C 285.534 124.794 288.732 127.992 288.732 131.938 Z" style="fill: rgb(255, 255, 255);"/>
+  <path d="M -84.032 -58.062 L 568.167 -58.062 L 568.167 335.607 L -84.032 335.607 Z M 14.821 11.249 C 9.583 16.488 6.252 24.13 6.165 32.148 L 6.165 237.853 C 6.252 245.871 9.583 253.513 14.821 258.752 C 20.06 263.99 27.702 267.321 35.72 267.408 L 444.281 267.408 C 452.299 267.321 459.941 263.99 465.18 258.752 C 470.418 253.513 473.749 245.871 473.836 237.853 L 473.836 32.148 C 473.749 24.13 470.418 16.488 465.18 11.249 C 459.941 6.011 452.299 2.68 444.281 2.593 L 35.72 2.593 C 27.702 2.68 20.06 6.011 14.821 11.249 Z" style="filter: url(&quot;#drop-shadow-filter-0&quot;); clip-path: url(&quot;#clip-0&quot;); stroke-width: 10px; stroke: rgb(31, 158, 255);"/>
+</svg>
