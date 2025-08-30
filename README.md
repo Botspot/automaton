@@ -5,44 +5,48 @@ Bash-based alternative to SikuliX, this automates any task on linux with compute
 > *noun*  
 > A machine or mechanism that operates without human intervention, especially a robot.
 
-The goal here is to automate nearly any repetitive task on a computer - not just with a series of coordinates to click with delays in-between, but with some adaptive intelligence behind it.  
+Let's say you need a [complex computer task] to be done so many times that no human would willingly sit down and do it by hand.  
+How will you automate it? Most people would try to approach it 1 of 2 ways:  
+1. Build a custom program, directly talk to any APIs, may require reverse engineering website(s) or programs.
+   - Difficulty: HIGH
+   - Reliability: HIGH
+   - Development time: HIGH
+2. Make a shell script that blindly repeats human actions (move the mouse to preset coordinates, wait, click, repeat)
+   - Difficulty: LOW
+   - Reliability: LOW (the entire script breaks every time anything moves on the screen)
+   - Development time: MEDIUM (likely requires ongoing maintenance)
 
-Imagine you want to download a payment report file from your bank's website. And the website is slow, and it takes a lot of clicks to do get the job done.  
-I once made a little shell script that did something like:
-```bash
-chromium https://my.bank & # go to my bank's website
-sleep 60                   # wait for page to load
+3. Automaton offers a third option: **localized computer vision**.
+   - Difficulty: LOW
+   - Reliability: HIGH
+   - Development time: LOW
 
-click 1023,539             # click username field (hopefully it is there)
-type '********'            # type the username
-click 1023,589             # click password field (hopefully it is there)
-type '********'            # type password
-click 1023,600             # click LOGIN button (hopefully it is there)
-sleep 20                   # wait for page to load
+### Doesn't computer vision require a cloud API service, or a powerful graphics card?
+- **Nope.**
+### Doesn't computer vision require good programming skills?
+- **Not anymore.** ( ͡° ͜ʖ ͡°)
 
-...                        # many more steps...
+This computer vision algorithm is so lightweight, in fact, that even with it running locally on a Raspberry Pi's CPU power alone, it still finds and clicks buttons on the screen faster than any human can.  
+And Automaton is here to help cut down on that development time.
+- Show it regions of the screen to look for, then tell it how to interact with those regions.
+- Use the full suite of desktop automation functions, painstakingly made to work in both X11 and Wayland.
+- Blaze through capturing screen regions and coordinates, thanks to a custom photo editor.
+- And use the ChatGPT template to get guided assistance for automating your [complex computer task].
 
-click 1794,378             # click download report button (hopefully it is there)
-type Alt+F4                # close the browser
+## Get started:
+Use any Debian flavored Linux distro. This should still work on other distros, but you will need to install the dependencies manually.  
+Ubuntu, Raspberry Pi OS, Pop!OS are tested to work. x86_64 and arm64 CPU architectures are tested to work.
 ```
-...And it stopped working in a week, because the website got updated and one of the buttons moved downwards a few pixels.  All subsequent steps had the mouse clicking in random places on the login screen.  
-
-With Automaton, you could show it a screenshot of what to look for, and it will find it no matter where it appears on the screen. So now the script could be like:
-```bash
-chromium https://my.bank &        # go to my bank's website
-find_and_click username-field.png # wait for username field to appear, and click it
-type '********'                   # type the username
-find_and_click password-field.png # find the password field, and click it
-type '********'                   # type the password
-find_and_click login-button.png   # wait for login button to appear, and click it
-
-...                               # many more steps...
-
-find_and_click download.png       # click download report button
-type Alt+F4                       # close the browser
+git clone https://github.com/Botspot/automaton
+./automaton/gui
 ```
-With a sliding window template matching algorithm from OpenCV, this is possible and practical. After just a couple hours of messing around, I've already gotten the core functionality working. Computer vision can be slow, but for finding a small object in a 1920x1080 screenshot, it takes around 0.3 seconds on my Pi5. That's plenty fast enough for my purposes.
-
-## This project is not ready for users yet.
-I plan to add more to this repo as time goes on. The end goal is to make a step-by-step interface and a simple scripting language, allowing anybody to automate any computer task on any Linux distro. (Wayland or X11, ARM or x86)  
-Please click the Star button on the repository if this interests you! (I want to get an idea of how exciting this idea is to other people)
+## Usage:
+Since nobody enjoys reading documentation, I'm trying a new approach: **the graphical interface *is* the documentation.**  
+![screenshot](https://github.com/user-attachments/assets/bfb2dfea-9fb3-42b0-8dec-8b45ab450ca0)  
+These buttons help generate premade chunks of working code. Simply click one, adjust any options it may have, and then paste the code chunk into your script.  
+![screenshot](https://github.com/user-attachments/assets/673de504-ce40-4c9a-9c5e-4c205cc96b9a)  
+In this example, here's the code that was generated from those options:  
+![screenshot](https://github.com/user-attachments/assets/0b128467-be94-485e-85dd-22f5e8c6bfdb)
+## Status:
+This project is in BETA. It should be in working order, but it's also very new. (released on August 30, 2025)  
+Please report any bugs [here](https://github.com/Botspot/automaton/issues). Ask questions [here](https://github.com/Botspot/automaton/issues). Join my discord server [here](https://discord.gg/RXSTvaUvuu).
