@@ -351,6 +351,33 @@ text_editor() { #Open user-preferred text editor. $1 is file to open (function a
   "$preferrededitor" "$1" &
 }
 
+update_check() { #check for updates and reload the script if necessary
+  localhash="$(cd "$DIRECTORY" ; git rev-parse HEAD)"
+  latesthash="$(git ls-remote https://github.com/Botspot/automaton HEAD | awk '{print $1}')"
+  if [ "$localhash" != "$latesthash" ] && [ ! -z "$latesthash" ] && [ ! -z "$localhash" ];then
+    if [ "$disable_updates" == true ];then
+      echo "Updates available, but you have auto-updates disabled."
+      return 0
+    fi
+    echo "Auto-updating Automaton for the latest features and improvements..."
+    (cd "$DIRECTORY"
+    git restore . #abandon changes to tracked files (otherwise users who modified this script are left behind)
+    git -c color.ui=always pull | cat #piping through cat makes git noninteractive
+    return "${PIPESTATUS[0]}")
+    
+    if [ $? == 0 ];then
+      echo "git pull finished. Reloading script..."
+      "$AUTOMATON_DIR/gui" "${original_flags[@]}"
+      exit $?
+    else
+      warning "update_check: git pull failed. Continuing..."
+    fi
+  fi
+}
+
+#Track the original arguments given to the script in order to restart in an update
+original_flags=("$@")
+
 AUTOMATON_CONFIG=~/.config/automaton
 SCREENSHOTS_CACHE="${AUTOMATON_CONFIG}/screenshots"
 THUMBNAILS_CACHE="${AUTOMATON_CONFIG}/thumbnails"
@@ -360,6 +387,9 @@ mkdir -p "$SCREENSHOTS_CACHE" "$THUMBNAILS_CACHE" || error "Making cache folder 
 locator_pipe="$AUTOMATON_CONFIG/locator_pipe"
 
 yadflags=(--title=Automaton --class=automaton --name=automaton --center --separator='\n')
+
+#check for updates
+update_check
 
 mode="$1"
 mode=choose-project
