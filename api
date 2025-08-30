@@ -197,6 +197,22 @@ mouse_click() { #normal mouse click
   fi
 }
 
+mouse_right_click() { #mouse do a right-click
+  if [ "$XDG_SESSION_TYPE" == x11 ];then
+    xdotool click 3
+  elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    wlrctl pointer click left
+  fi
+}
+
+mouse_middle_click() { #mouse press the scroll wheel
+  if [ "$XDG_SESSION_TYPE" == x11 ];then
+    xdotool click 2
+  elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    wlrctl pointer click middle
+  fi
+}
+
 mouse_scroll_down() { #scroll down $1 times (once if not specified)
   local scrolltimes="$1"
   if [ -z "$scrolltimes" ];then
@@ -242,6 +258,56 @@ keyboard_type() { #type text in $1 with the keyboard
     echo -n "$1" | xdotool type --file -
   elif [ "$XDG_SESSION_TYPE" == wayland ];then
     wlrctl type "$1"
+  fi
+}
+
+keyboard_shortcut() { #press multiple keys at once, and special keys (one argument per key, as any delimiter used prevents that key from being used)
+  local IFS='+'
+  local wlrctl_modifiers=''
+  local wlrctl_letterss=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      Ctrl)
+        wlrctl_modifiers+=",CTRL"
+        ;;
+      Shift)
+        wlrctl_modifiers+=",SHIFT"
+        ;;
+      Alt)
+        wlrctl_modifiers+=",ALT"
+        ;;
+      Super)
+        wlrctl_modifiers+=",SUPER"
+        ;;
+      Tab)
+        wlrctl_letters+=$'\t'
+        ;;
+      Escape)
+        wlrctl_letters+=$'\e'
+        ;;
+      Backspace)
+        wlrctl_letters+=$'\b'
+        ;;
+      Enter)
+        wlrctl_letters+=$'\n'
+        ;;
+      *)
+        wlrctl_letters+="$key"
+        ;;
+    esac
+    shift
+  done
+  if [ "$XDG_SESSION_TYPE" == x11 ];then
+    #botspot finish this
+    echo -n "$1" | xdotool type --file -
+  elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    if [ -z "$wlrctl_letters" ];then
+      error "On Wayland, wlrctl requires a key combination to use at least 1 key that is NOT one of the following keys: Ctrl, Shift, Alt, Super."
+    elif [ ! -z "$wlrctl_modifiers" ];then
+      wlrctl type "$wlrctl_letters" modifiers "$(echo "$wlrctl_modifiers" | sed 's/^,//g')"
+    else
+      wlrctl type "$wlrctl_letters"
+    fi
   fi
 }
 
@@ -354,7 +420,7 @@ subscreen_stop() {
 }
 
 #set variables
-export AUTOMATON_DIR #necessary because this is usually assigned before `set -a`
+export AUTOMATON_DIR #necessary because this is usually assigned before sourcing api, which runs `set -a`
 if [ -z "$PATTERNS_DIR" ] && [ -z "$AUTOMATON_DIR" ];then
   error "api: PATTERNS_DIR and AUTOMATON_DIR must be set by the script that sources api"
 elif [ ! -d "$PATTERNS_DIR" ] && [[ "$0" != */gui ]];then
@@ -384,17 +450,21 @@ fi
 if [ ! -d /usr/share/doc/python3-numpy ];then
   install_list+=('python3-numpy')
 fi
-if [ ! -d /usr/share/doc/python3-pygame-sdl2 ];then
-  install_list+=('python3-pygame-sdl2')
-fi
 if ! command -v inotifywait >/dev/null ;then
   install_list+=('inotify-tools')
 fi
 if ! command -v identify >/dev/null ;then
   install_list+=('imagemagick-6.q16')
 fi
+#below this line are dependencies used by the gui
+if [ ! -d /usr/share/doc/python3-pygame-sdl2 ];then
+  install_list+=('python3-pygame-sdl2')
+fi
 if ! command -v yad >/dev/null ;then
   install_list+=('yad')
+fi
+if ! command -v shellcheck >/dev/null ;then
+  install_list+=('shellcheck')
 fi
 
 #nested display tools: if you do not plan to use subscreen function, set SKIP_INSTALLING_SUBSCREEN_DEPS=1 to avoid installing these
@@ -469,3 +539,5 @@ rm -f "$locator_pipe"
 
 #stop locator.py when userscript ends so only advanced users need to run locator_stop
 trap locator_stop EXIT SIGINT
+
+status_green "Automaton API has been sourced"

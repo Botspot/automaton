@@ -19,6 +19,14 @@ gui_pick_pixel() { #use region-picker.py to pick a pixel of the $1 image, output
   "${AUTOMATON_DIR}/region-picker.py" "$1" pixel
 }
 
+gui_pick_pixel_on_screen() { #uses a temporary screenshot, outputs coordinates (X,Y)
+  local screenshot="$RAM_LOCATION/automaton-gui_pick_pixel_on_screen.png"
+  
+  screenshot_fullscreen "$screenshot" || return 1
+  gui_pick_pixel "$screenshot" || return 1
+  rm -f "$screenshot"
+}
+
 generate_thumbnail() { #convert full size screenshot filename (already in cache) and shrink it for thumbnail folder
   local filename="$1"
   if [ ! -f "$SCREENSHOTS_CACHE/$filename" ];then
@@ -273,6 +281,7 @@ yadflags=(--title=Automaton --class=automaton --name=automaton --center --separa
 
 mode="$1"
 mode=choose-project
+mode=userscript-editor
 while true;do
 case "$mode" in
   choose-project) #project creation, selection, and onboarding
@@ -292,7 +301,7 @@ case "$mode" in
     
     interpret_patterns_dir_from_script() { #read the specified automaton script and try to find the path to the PATTERNS_DIR it is using. Output: folder path, and exit code 1 if it does not exist
       [ ! -f "$1" ] && error "interpret_patterns_dir_from_script(): script '$1' not found"
-      local PATTERNS_DIR="$(grep -m1 -o 'PATTERNS_DIR=.*' "$1" | sed 's/#.*//g ; s+~/+'$HOME'+g ; s+$HOME+'$HOME'+g ; s/^PATTERNS_DIR=//g ; s/^"//g ; s/"$//g')"
+      local PATTERNS_DIR="$(grep -m1 -o 'PATTERNS_DIR=.*' "$1" | sed 's/#.*//g ; s+~/+'$HOME/'+g ; s+$HOME+'$HOME'+g ; s/^PATTERNS_DIR=//g ; s/^"//g ; s/"$//g')"
       echo "$PATTERNS_DIR" #send the interpreted PATTERNS_DIR to stdout
       [ -d "$PATTERNS_DIR" ] #return code 0 if found, otherwise return 1
     }
@@ -405,28 +414,153 @@ locator_start
     if [ ! -f "$USERSCRIPT" ] || [ ! -d "$PATTERNS_DIR" ];then
       error "userscript-editor mode requires valid values for USERSCRIPT and PATTERNS_DIR."
     fi
+    export USERSCRIPT
+    #functions to be used by yad in userscript-editor mode:
+    ask_ai() { #opens a browser to duck.ai, and provides a premade prompt
+      yadflags=(--title=Automaton --class=automaton --name=automaton --center --separator='\n')
+      
+      ai_text_payload="I need help bash scripting on a $(cat /etc/os-release | grep PRETTY_NAME | tr -d '"' | awk -F= '{print $2}') Linux distro.
+Please assume I have little scripting experience, so make explanations beginner-friendly. Use code tags. Do not write lengthy summaries at the end of your answers.
+The script in question is named \`${USERSCRIPT}\` and is intended to automate graphical tasks in the $XDG_SESSION_TYPE desktop environment, using shell functions provided by the Automaton project on github.
+Below is some documentation for Automaton.
+\`\`\`
+#botspot make a documentation file
+$(cat "$AUTOMATON_DIR/documentation")
+\`\`\`
+Below is the current contents of \`${USERSCRIPT}\`:
+\`\`\`bash
+$(cat "${USERSCRIPT}")
+\`\`\`"
+      ai_text_payload="$(echo "$ai_text_payload" | yad "${yadflags[@]}" --text-info --tail --editable --wrap --back=black --fore='#00AAFF' \
+        --text="<big>To get the best AI assistance, this text should be pasted into the beginning of your chat. Add your question to the end, then proceed.</big>" \
+        --button="<big>Copy text and launch AI chat window</big>":0)"
+      button=$?
+      status "ai_text_payload=$ai_text_payload"
+      if [ "$button" == 0 ] && [ ! -z "$ai_text_payload" ];then
+        clipboard_set "$ai_text_payload"
+        
+        #opens a browser to duck.ai
+        x-www-browser "https://duckduckgo.com/?q=DuckDuckGo+AI+Chat&ia=chat&duckai=1" &
+      fi
+    }
     
+    test_userscript() { #run $USERSCRIPT in a visible terminal, add $1=debug for debug mode
+      if [ "$1" == debug ];then
+        "$AUTOMATON_DIR/terminal-run" "bash -x ${USERSCRIPT};echo 'Press Enter to exit.';read enter" "Running Automaton project in debug mode: $(basename ${USERSCRIPT})"
+      else
+        "$AUTOMATON_DIR/terminal-run" "${USERSCRIPT};echo 'Press Enter to exit.';read enter" "Running Automaton project: $(basename ${USERSCRIPT})"
+      fi
+    }
+    
+    draft_snippet() { #handles all GUI code snippet generators
+      default_text="Customize the behavior of this code snippet, then paste it into your script."
+      yadflags=(--title=Automaton --class=automaton --name=automaton --center --separator='\n')
+      yad_common=("${yadflags[@]}" --form --text="$default_text" \
+        --button="Copy code!!Then paste it into $(basename "${USERSCRIPT}")":0)
+      
+      mode="$1"
+      case "$mode" in
+        click|right-click|middle-click) #user wants a click function added to their script
+          output="$(yad "${yad_common[@]}" \
+            --field='Click type:CB' "$mode!$(echo -en 'click\nright-click\nmiddle-click' | grep -vx "$mode" | tr '\n' '!' | sed 's/!$//g')" \
+            --field='Repetition:CB' "single click!double-click")"
+          [ $? != 0 ] && return
+          function_name="mouse_$(echo "$output" | sed -n 1p | tr '-' '_')"
+          repetition="$(echo "$output" | sed -n 2p)"
+          if [ "$repetition" == 'single click' ];then
+            clipboard_set "$function_name"
+          elif [ "$repetition" == 'double-click' ];then
+            clipboard_set "$function_name"$'\n'"sleep 0.2"$'\n'"$function_name"
+          fi
+          ;;
+        scroll)
+          output="$(yad "${yad_common[@]}" \
+            --field='Scroll direction:CB' "up!^down" \
+            --field='Repetition:NUM' "1!1..30")"
+          [ $? != 0 ] && return
+          scroll_direction="$(echo "$output" | sed -n 1p)"
+          repetition="$(echo "$output" | sed -n 2p)"
+          
+          clipboard_set "mouse_scroll_$scroll_direction $repetition"
+          ;;
+        move-mouse)
+          output="$(yad "${yad_common[@]}" \
+            --text="$default_text"$'\n'"<b><u>WARNING! Try to avoid using this.</u></b>"$'\n'"It's better to use <b>patterns</b> to position the mouse." \
+            --field='Coordinates:' "0,0" \
+            --field='Pick coordinates:FBTN' "@bash -c 'gui_pick_pixel_on_screen | sed s/^/1:/g'" \
+            --field='Test it now:FBTN' 'bash -c "mouse_move %1"')"
+          [ $? != 0 ] && return
+          coordinates="$(echo "$output" | sed -n 1p)"
+          
+          clipboard_set "mouse_move $coordinates"
+          ;;
+        keyboard-type)
+          output="$(yad "${yad_common[@]}" \
+            --field='Text to type:TXT' "" )"
+          [ $? != 0 ] && return
+          text_to_type="$(echo "$output" | sed -n 1p | sed "s/'/\\\'/g")"
+          
+          clipboard_set "keyboard_type '$text_to_type'"
+          ;;
+        keyboard-shortcut)
+          output="$(yad "${yad_common[@]}" \
+            --text="$default_text"$'\n'"Choose up to 3 keys to be pressed while pressing normal keys." \
+            --field='Special key 1:CB' "Ctrl!Shift!Alt!Super!Enter!Tab!Escape!Backspace!Space" \
+            --field='Special key 2:CB' "!Ctrl!Shift!Alt!Super!Enter!Tab!Escape!Backspace!Space" \
+            --field='Special key 3:CB' "!Ctrl!Shift!Alt!Super!Enter!Tab!Escape!Backspace!Space" \
+            --field='Normal keys:' "")"
+          [ $? != 0 ] && return
+          keycombo="$(echo "$output" | head -n3 | tr '\n' ' ' | sed 's/  / /g ; s/ $//g')"
+          normalkeys="$(echo "$output" | sed -n 4p)"
+          if [ ! -z "$normalkeys" ];then
+            #quote normal keys in single-quotes, and escape any single quotes
+            keycombo+=" '$(echo "$normalkeys" | sed "s/'/'\\\''/g")'"
+          fi
+          
+          clipboard_set "keyboard_shortcut $keycombo"
+          ;;
+        set-clipboard)
+          clipboard="$(yad "${yad_common[@]}" \
+            --field='Text to copy:' '' \
+            --field='Test it now:FBTN' 'bash -c "clipboard_set %1"')"
+          [ $? != 0 ] && return
+          echo "copying code: $clipboard"
+          clipboard_set "clipboard_set '$(echo "$clipboard" | sed "s/'/'\\\''/g")'"
+          ;;
+      esac
+    }
     #open the userscript in a text editor
-    text_editor "$USERSCRIPT" || exit 1
-    yad "${yadflags[@]}" --width=400 --height=500 --form --scroll \
-      --button="Manage Patterns":true \
-      --button="Run Script":true \
-      --text="Build your script. This helps make short code snippets that drop into your script." \
-      --field="<big>Patterns</big> (stuff to find on the screen)":LBL '' \
-      --field="Wait for a pattern to appear":FBTN '' \
-      --field="Wait for a pattern, then click it":FBTN '' \
-      --field="If a pattern is already there, click it":FBTN '' \
-      --field="Given 2 patterns, which one is on screen?":FBTN '' \
-      --field="<big>SubScreens</big> (a virtual screen keeps things tidy)":LBL '' \
-      --field="Wayland subscreen (visible)":FBTN '' \
-      --field="Wayland subscreen (invisible)":FBTN '' \
-      --field="X11 subscreen (visible)":FBTN '' \
-      --field="X11 subscreen (invisible)":FBTN '' \
-      --field="Stop a running subscreen":FBTN '' \
+    #text_editor "$USERSCRIPT" || exit 1
+    yad "${yadflags[@]}" --title="Automaton script builder" --width=400 --height=500 --form --scroll \
+      --text="Most of these buttons make short code snippets that drop into <a href="\""file://${USERSCRIPT}"\"">$(basename "${USERSCRIPT}")</a>." \
+      --field="<big>Mouse &amp; Keyboard &amp; Clipboard</big>":LBL '' \
+      --field="Click!!Simulates a normal mouse click":FBTN "bash -c 'draft_snippet click'" \
+      --field="Right-click!!Simulates the mouse clicking its right button":FBTN "bash -c 'draft_snippet right-click'" \
+      --field="Middle-click!!Simulates the mouse clicking its scroll wheel":FBTN "bash -c 'draft_snippet middle-click'" \
+      --field="Scroll up/down!!Simulates the scroll wheel spinning":FBTN "bash -c 'draft_snippet scroll'" \
+      --field="Move mouse!!Moves the mouse pointer to exact coordinates (0,0 is the top-left corner)":FBTN "bash -c 'draft_snippet move-mouse'" \
+      --field="Type words!!Simulates the keyboard typing (ASCII characters only. Use <b>Set clipboard</b> for non-ASCII characters)":FBTN "bash -c 'draft_snippet keyboard-type'" \
+      --field="Keyboard shortcut!!Presses combinations of keys, and other special keys":FBTN "bash -c 'draft_snippet keyboard-shortcut'" \
+      --field="Set clipboard!!Copies the text of your choice to the clipboard":FBTN "bash -c 'draft_snippet set-clipboard'" \
+      --field="<big>Patterns</big> (things to find on the screen)":LBL '' \
+      --field="Pattern Manager!!Create/Rename/Edit/Delete patterns for this project":FBTN '' \
+      --field="Wait for a pattern to appear!!Keeps checking for something specific appears on-screen, then proceeds":FBTN '' \
+      --field="Do something until a pattern appears!!Repeatedly clicks/scrolls/types until something specific appears on-screen":FBTN '' \
+      --field="Wait for a pattern, then click it!!Keeps checking for the chosen pattern to appear, then clicks it":FBTN '' \
+      --field="If a pattern is already there, click it!!Checks once for a pattern, clicks it if found":FBTN '' \
+      --field="Given 2 patterns, wait for one to appear!!Waits for 1 of 2 patterns to appear, behaves differently based on which one is spotted":FBTN '' \
+      --field="<big>SubScreens</big> (a virtual screen keeps things organized)":LBL '' \
+      --field="X11 subscreen (visible)!!Launches a windowed screen that all future steps will use":FBTN '' \
+      --field="X11 subscreen (invisible)!!Starts a hidden screen that all future steps will use":FBTN '' \
+      --field="Wayland subscreen (visible)!!Launches a windowed screen that all future steps will use":FBTN '' \
+      --field="Wayland subscreen (invisible)!!Starts a hidden screen that all future steps will use":FBTN '' \
+      --field="Stop a running subscreen!!Makes all future steps run in your primary screen":FBTN '' \
       --field="<big>Assistance and debugging</big>":LBL '' \
-      --field="Ask AI for scripting help":FBTN 'x-www-browser https://duckduckgo.com/?q=DuckDuckGo+AI+Chat&ia=chat&duckai=1' \
-      --field="Check script for syntax errors":FBTN '' \
-      --field="Run script in debug mode (bash -x)":FBTN ''
+      --field="Open an issue!!Report a bug or ask for help":FBTN 'x-www-browser https://github.com/Botspot/automaton/issues' \
+      --field="Ask AI for scripting help!!Copies a prompting template for an anonymized ChatGPT to help you effectively use Automaton's features":FBTN 'bash -c "ask_ai"' \
+      --field="Check script for syntax errors!!Analyzes the script with shellcheck ":FBTN "$AUTOMATON_DIR/terminal-run "\""shellcheck '${USERSCRIPT}';echo 'Press Enter to exit.';read enter"\"" "\""Automaton Shellcheck for $(basename '${USERSCRIPT}')"\""" \
+      --field="Run script in debug mode (bash -x)!!Shows every command ran by $(basename "${USERSCRIPT}")":FBTN "bash -c 'test_userscript debug'" \
+      --button="Run Script":"bash -c test_userscript"
     exit 0
     ;;
   make-new-pattern)
