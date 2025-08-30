@@ -8,33 +8,33 @@ Bash-based alternative to SikuliX, this automates any task on linux with compute
 Let's say you need a [complex computer task] to be done so many times that no human would willingly sit down and do it by hand.  
 How will you automate it? Most people would try to approach it 1 of 2 ways:  
 1. Build a custom program, directly talk to any APIs, may require reverse engineering website(s) or programs.
-   - Difficulty: HIGH
-   - Reliability: HIGH
-   - Development time: HIGH
-2. Make a shell script that blindly repeats human actions (move the mouse to preset coordinates, wait, click, repeat)
-   - Difficulty: LOW
-   - Reliability: LOW (the entire script breaks every time anything moves on the screen)
-   - Development time: MEDIUM (likely requires ongoing maintenance)
+   - Reliability: **HIGH**
+   - Difficulty: **HIGH**
+   - Development time: **HIGH**
+3. Make a shell script that blindly repeats human actions (move the mouse to preset coordinates, wait 2 seconds, click, repeat)
+   - Reliability: **LOW**
+   - Difficulty: **LOW**
+   - Development time: **MEDIUM** (needs continual maintenance)
 
-3. Automaton offers a third option: **localized computer vision**.
-   - Difficulty: LOW
-   - Reliability: HIGH
-   - Development time: LOW
+4. Automaton offers a third option: **localized computer vision**.
+   - Reliability: **HIGH**
+   - Difficulty: **LOW**
+   - Development time: **LOW**
 
-### Doesn't computer vision require a cloud API service, or a powerful graphics card?
+### Computer vision? Doesn't that require a cloud API service, or a powerful graphics card?
 - **Nope.**
 ### Doesn't computer vision require good programming skills?
 - **Not anymore.** ( ͡° ͜ʖ ͡°)
 
-This computer vision algorithm is so lightweight, in fact, that even with it running locally on a Raspberry Pi's CPU power alone, it still finds and clicks buttons on the screen faster than any human can.  
-And Automaton is here to help cut down on that development time.
+In fact, OpenCV's vision algorithm is so lightweight, that even with it running locally on a Raspberry Pi's CPU power alone, it still finds and clicks buttons on the screen faster than any human can.  
+And Automaton is here to help give that power to anybody with even a below average attention span.
 - Show it regions of the screen to look for, then tell it how to interact with those regions.
-- Use the full suite of desktop automation functions, painstakingly made to work in both X11 and Wayland.
+- Use the full suite of desktop automation functions, all of which work in both X11 and Wayland.
 - Blaze through capturing screen regions and coordinates, thanks to a custom photo editor.
-- And use the ChatGPT template to get guided assistance for automating your [complex computer task].
+- And use the ChatGPT template to get guided scripting assistance.
 
 ## Get started:
-Use any Debian flavored Linux distro. This should still work on other distros, but you will need to install the dependencies manually.  
+Use any Debian flavored Linux distro. This should still work on non-debian distros, but the script will ask you to install needed dependencies manually.  
 Ubuntu, Raspberry Pi OS, Pop!OS are tested to work. x86_64 and arm64 CPU architectures are tested to work.
 ```
 git clone https://github.com/Botspot/automaton
@@ -48,5 +48,5 @@ These buttons help generate premade chunks of working code. Simply click one, ad
 In this example, here's the code that was generated from those options:  
 ![screenshot](https://github.com/user-attachments/assets/0b128467-be94-485e-85dd-22f5e8c6bfdb)
 ## Status:
-This project is in BETA. It should be in working order, but it's also very new. (released on August 30, 2025)  
+This project is in BETA. It should be in working order, but it's also very new. (Released on August 30, 2025)  
 Please report any bugs [here](https://github.com/Botspot/automaton/issues). Ask questions [here](https://github.com/Botspot/automaton/issues). Join my discord server [here](https://discord.gg/RXSTvaUvuu).
