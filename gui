@@ -27,6 +27,36 @@ gui_pick_pixel_on_screen() { #uses a temporary screenshot, outputs coordinates (
   rm -f "$screenshot"
 }
 
+gui_pick_pattern_offset() { #Prompt user to choose a point relative to a pattern. Uses original screenshot if possible. input: $1=pattern, outputs offset (+X+Y)
+  local pattern="$1"
+  if [ ! -f "$PATTERNS_DIR/$pattern" ];then
+    error "gui_pick_pattern_offset(): pattern png file at '$PATTERNS_DIR/$pattern' not found!"
+  fi
+  
+  #hopefully nobody includes regex characters in a pattern name
+  local screenshot_regions_line="$(grep "^$pattern\t" "$PATTERNS_DIR/screenshot-regions.tsv" 2>/dev/null | tail -1)"
+  if [ ! -z "$screenshot_regions_line" ];then
+    #found screenshot name and cropped region
+    screenshot="$(echo "$screenshot_regions_line" | awk -F'\t' '{print $2}')"
+    region="$(echo "$screenshot_regions_line" | awk -F'\t' '{print $3}')"
+    
+    #if data is invalid, fallback to picking a region only within the pattern
+    if [ -z "$screenshot" ] || [ -z "$region" ] || [ ! -f "$SCREENSHOTS_CACHE/$screenshot" ];then
+      screenshot_regions_line=''
+    fi
+  fi
+  if [ ! -z "$screenshot_regions_line" ];then
+    #display region in a rectangle, over the original screenshot used to make this pattern, to pick a pixel
+    offset="$("${AUTOMATON_DIR}/region-picker.py" "$SCREENSHOTS_CACHE/$screenshot" pixel_in_rectangle "$region")"
+  else
+    #fallback to only display the pattern, pick a pixel on it, and convert x,y coordinates to +x+y
+    warning "gui_pick_pattern_offset(): could not find a screenshot and/or region that corresponds to '$pattern'. Please make corrections to the screenshots cache at $SCREENSHOTS_CACHE, and '$PATTERNS_DIR/screenshot-regions.tsv'."
+    offset="$("${AUTOMATON_DIR}/region-picker.py" "$PATTERNS_DIR/$pattern" pixel | sed 's/^/+/g ; s/,/+/g')"
+  fi
+  
+  echo "$offset"
+}
+
 generate_thumbnail() { #convert full size screenshot filename (already in cache) and shrink it for thumbnail folder
   local filename="$1"
   if [ ! -f "$SCREENSHOTS_CACHE/$filename" ];then
@@ -126,9 +156,7 @@ FALSE"
 }
 
 gui_pattern_picker() { #pick a pattern from this project's PATTERNS_DIR. outputs a filename.
-  local IFS=$'\n'
   local button
-  local first_loop=1
   
   #add a new pattern button before looping through existing patterns
   (echo "New pattern from screenshot
@@ -137,7 +165,6 @@ ${AUTOMATON_DIR}/icons/new-pattern.png
 bash -c 'kill "\$"YAD_PID; yadflags=(--center --separator="\""\n"\""); gui_make_pattern "\"\$"(gui_screenshot_picker)"\""'
 FALSE"
   find "$PATTERNS_DIR" -name '*.png' | sort | sed 's+.*/++g' | while read filename ;do
-    #if first loop iteration, add a new pattern button
     
     echo "$filename
 $(identify -ping -format '%wx%h PNG image' "$PATTERNS_DIR/$filename")
@@ -149,7 +176,51 @@ FALSE"
   if [ $button != 0 ] && [ $button != 143 ];then
     error "User exited gui_pattern_picker"
   fi
-  error 'got here'
+}
+
+gui_pattern_manager() { #Test/Edit/Rename/Delete patterns in $PATTERNS_DIR
+  while true;do
+    output="$(find "$PATTERNS_DIR" -name '*.png' | sort | sed 's+.*/++g' | \
+    while read filename ;do
+      echo "$PATTERNS_DIR/$filename"$'\n'"$filename"
+    done | yad "${yadflags[@]}" --title "Automaton Pattern Manager" --width 450 --height=300 --list --no-headers --column=:IMG --column=Name --listen --item-width 100 --single-click \
+      --text="Select a pattern, then choose an action to apply to it." \
+      --button="Cancel!!Exit Pattern Manager:1" \
+      --button="Delete!!Remove this pattern:6" \
+      --button="Rename!!Keep this pattern but change its filename:2" \
+      --button="Edit!!Choose any screenshot and a region to crop for this pattern:4" \
+      --button="Test!!Monitor in real time if the pattern is found on the screen:0" )"
+    button=$?
+    pattern="$(echo "$output" | sed -n 2p)"
+    if [ -z "$pattern" ];then
+      error "gui_pattern_manager(): user exited without selecting anything"
+    fi
+    case $button in
+      0) #test
+        gui_test_pattern_live "$pattern"
+        ;;
+      2) #rename
+        new_name="$(yad "${yadflags[@]}" --entry --entry-text="$pattern" --text="Choose a new name for <u>$pattern</u>")"
+        button=$?
+        if [ "$button" != 0 ];then
+          true #user clicked Cancel
+        elif [[ "$new_name" != *.png ]];then
+          #ensure new name ends in .png
+          new_name+='.png'
+        fi
+        mv -f "$PATTERNS_DIR/$pattern" "$PATTERNS_DIR/$new_name"
+        #change entry in the references spreadsheet
+        sed -i "s/^$pattern\t/$new_name\t/g" "$PATTERNS_DIR/screenshot-regions.tsv"
+        ;;
+      4) #edit - recreate the pattern from a screenshot - keep original name
+        gui_make_pattern "$(gui_screenshot_picker)" "$pattern"
+        ;;
+      6) #delete pattern
+        sed -i "/^$final_filename\t/d" "$PATTERNS_DIR/screenshot-regions.tsv"
+        rm -f "$PATTERNS_DIR/$pattern"
+        ;;
+    esac
+  done
 }
 
 gui_make_pattern() { #from the $1 screenshot filename, prompt user to crop it, name it if $2 is blank, and output that filename
@@ -183,12 +254,22 @@ gui_make_pattern() { #from the $1 screenshot filename, prompt user to crop it, n
       text="Name cannot be left blank."$'\n'"$text"
       final_filename=''
     else
-      #user chose a valid unique filename
-      break
+      #user chose a valid unique filename, loop will exit
+      true
     fi
   done
-  
+  #name the pattern
   mv -f "$RAM_LOCATION/automaton-new-pattern.png" "$PATTERNS_DIR/$final_filename" || error "Failed to move pattern to $PATTERNS_DIR/$final_filename"
+  
+  #record screenshot name and cropped region for pixel picking later
+  if [ ! -f "$PATTERNS_DIR/screenshot-regions.tsv" ];then
+    #initialize the file by naming the columns
+    echo -e "pattern filename\tscreenshot filename\tcrop region" > "$PATTERNS_DIR/screenshot-regions.tsv"
+  else
+    #file already exists, so in case this pattern is being recreated, remove any references to it first
+    sed -i "/^$final_filename\t/d" "$PATTERNS_DIR/screenshot-regions.tsv"
+  fi
+  echo "$final_filename"$'\t'"$filename"$'\t'"$region" >> "$PATTERNS_DIR/screenshot-regions.tsv"
   echo "$final_filename"
 }
 
@@ -196,7 +277,11 @@ gui_test_pattern_live() { #indicate in real-time if pattern $1 is seen on screen
   #pattern="$(gui_pattern_picker)" || exit 1
   local pattern="$1"
   local offset="$2"
-  [ -z "$offset" ] && offset='+0+0'
+  if [ ! -f "$PATTERNS_DIR/$pattern" ];then
+    error "locate_pattern(): pattern png file at '$PATTERNS_DIR/$pattern' not found!"
+  elif [ -z "$offset" ];then
+    offset='+0+0'
+  fi
   
   locator_start
   
@@ -233,7 +318,9 @@ bash -c 'mouse_move $coordinates'"
 }
 
 text_editor() { #Open user-preferred text editor. $1 is file to open (function adapted from Pi-Apps)
-  [ -z "$1" ] && error "text_editor(): no file specified"
+  if [ -z "$1" ];then
+    error "text_editor(): no file specified"
+  fi
   
   #find the best text editor
   local preferrededitor="$(cat "$AUTOMATON_CONFIG/text-editor" 2>/dev/null || echo geany)"
@@ -264,11 +351,6 @@ text_editor() { #Open user-preferred text editor. $1 is file to open (function a
   "$preferrededitor" "$1" &
 }
 
-#botspot: user needs to choose these
-USERSCRIPT=~/Desktop/project1/project1.sh
-PATTERNS_DIR=~/Desktop/project1/patterns
-mkdir -p "$PATTERNS_DIR"
-
 AUTOMATON_CONFIG=~/.config/automaton
 SCREENSHOTS_CACHE="${AUTOMATON_CONFIG}/screenshots"
 THUMBNAILS_CACHE="${AUTOMATON_CONFIG}/thumbnails"
@@ -281,7 +363,6 @@ yadflags=(--title=Automaton --class=automaton --name=automaton --center --separa
 
 mode="$1"
 mode=choose-project
-mode=userscript-editor
 while true;do
 case "$mode" in
   choose-project) #project creation, selection, and onboarding
@@ -367,10 +448,10 @@ case "$mode" in
     
     output="$(yad "${yadflags[@]}" --width=400 --form \
       --field='New Automaton project':FBTN "@bash -c 'yad_new_project_wizard'" \
-      --field='Open existing project':FBTN "@bash -c 'yad_existing_project_wizard'" \
+      --field='Choose existing project':FBTN "@bash -c 'yad_existing_project_wizard'" \
       --field='Script::RO' "$(echo "$USERSCRIPT" | sed "s+$HOME+~+g")" \
       --field='Patterns Folder::RO' "$(echo "$PATTERNS_DIR" | sed "s+$HOME+~+g")" \
-      --button=Next:0)"
+      --button='Open this project':0)"
     USERSCRIPT="$(echo "$output" | sed -n 3p | sed "s+~+$HOME+g")"
     PATTERNS_DIR="$(echo "$output" | sed -n 4p | sed "s+~+$HOME+g")"
     
@@ -387,9 +468,6 @@ case "$mode" in
       fi
       rm -f "$USERSCRIPT" || error "Failed to first remove '$USERSCRIPT'"
       echo "#!/bin/bash
-
-#exit this script on any errors
-set -e
 
 #folder that contains the patterns to be used by this script
 PATTERNS_DIR=$(echo '"'"$PATTERNS_DIR"'"' | sed "s+"\""$HOME+"\"\$"HOME+g")
@@ -421,25 +499,45 @@ locator_start
       
       ai_text_payload="I need help bash scripting on a $(cat /etc/os-release | grep PRETTY_NAME | tr -d '"' | awk -F= '{print $2}') Linux distro.
 Please assume I have little scripting experience, so make explanations beginner-friendly. Use code tags. Do not write lengthy summaries at the end of your answers.
-The script in question is named \`${USERSCRIPT}\` and is intended to automate graphical tasks in the $XDG_SESSION_TYPE desktop environment, using shell functions provided by the Automaton project on github.
-Below is some documentation for Automaton.
+The script in question is named \`${USERSCRIPT}\` and is intended to automate graphical tasks in the $XDG_SESSION_TYPE desktop environment, using shell functions provided by the Automaton project on github. https://github.com/Botspot/automaton
+Below is all Automaton functions. This list was generated with: \`grep -F '() {' "\""$AUTOMATON_DIR/api"\""\`.
 \`\`\`
-#botspot make a documentation file
-$(cat "$AUTOMATON_DIR/documentation")
+$(grep -F '() {' "$AUTOMATON_DIR/api")
 \`\`\`
+Important notes:
+- AUTOMATON_DIR=$AUTOMATON_DIR - path to the automaton git repo, which contains api, gui, and other automaton helper scripts.
+- PATTERNS_DIR=$PATTERNS_DIR - path to folder that stores PNG files (patterns) used by the locate_pattern function.
+- Automaton's strength is its pattern recognition. Use it to move the mouse. Don't use hardcoded coordinate values.
+- All Automaton functions work the same in x11 and wayland.
+- All automaton functions expect a relative filename for patterns in PATTERNS_DIR. Don't use full path, don't add logic to check if a pattern png file exists.
+- Don't sleep X seconds to wait for an app or website to open. Simply use locate_pattern_retry to wait for something in that app/website to appear on screen.
+- To open a website, use chromium <website-url> &
+Bad:
+mouse_move 800,400
+Good:
+mouse_move $(locate_pattern_retry button-3.png center)
 Below is the current contents of \`${USERSCRIPT}\`:
 \`\`\`bash
 $(cat "${USERSCRIPT}")
-\`\`\`"
+\`\`\`
+Start your initial response with "\""<name of ai model> here. I am good at bash scripting and am familiar with Automaton's features."\"" Then if there is any further text after this sentence, that is my request and please respond to it.
+
+
+
+
+
+
+
+"
       ai_text_payload="$(echo "$ai_text_payload" | yad "${yadflags[@]}" --text-info --tail --editable --wrap --back=black --fore='#00AAFF' \
-        --text="<big>To get the best AI assistance, this text should be pasted into the beginning of your chat. Add your question to the end, then proceed.</big>" \
+        --text="<big>To get the best AI assistance, this text should be pasted into the beginning of your chat.</big>"$'\n'"<b>Add your question to the end, then proceed.</b>" \
         --button="<big>Copy text and launch AI chat window</big>":0)"
       button=$?
-      status "ai_text_payload=$ai_text_payload"
       if [ "$button" == 0 ] && [ ! -z "$ai_text_payload" ];then
         clipboard_set "$ai_text_payload"
         
         #opens a browser to duck.ai
+        echo 'opening browser...'
         x-www-browser "https://duckduckgo.com/?q=DuckDuckGo+AI+Chat&ia=chat&duckai=1" &
       fi
     }
@@ -453,6 +551,7 @@ $(cat "${USERSCRIPT}")
     }
     
     draft_snippet() { #handles all GUI code snippet generators
+      set -a
       default_text="Customize the behavior of this code snippet, then paste it into your script."
       yadflags=(--title=Automaton --class=automaton --name=automaton --center --separator='\n')
       yad_common=("${yadflags[@]}" --form --text="$default_text" \
@@ -524,37 +623,163 @@ $(cat "${USERSCRIPT}")
             --field='Text to copy:' '' \
             --field='Test it now:FBTN' 'bash -c "clipboard_set %1"')"
           [ $? != 0 ] && return
-          echo "copying code: $clipboard"
           clipboard_set "clipboard_set '$(echo "$clipboard" | sed "s/'/'\\\''/g")'"
+          ;;
+        dump-clipboard)
+          clipboard="$(yad "${yad_common[@]}")"
+          [ $? != 0 ] && return
+          clipboard_set "clipboard_dump"
+          ;;
+        pattern-wait)
+          output="$(yad "${yad_common[@]}" \
+            --text="$default_text"$'\n'"<b>Wait for a pattern to appear</b>" \
+            --field='Choose pattern:FBTN' '@bash -c "gui_pattern_picker | sed s/^/2:/g"' \
+            --field='Pattern:' '')"
+          [ $? != 0 ] && return
+          pattern="$(echo "$output" | sed -n 2p)"
+          clipboard_set "locate_pattern_retry '$pattern'"
+          ;;
+        pattern-do-wait)
+          output="$(yad "${yad_common[@]}" \
+            --text="$default_text"$'\n'"<b>Repeat command until pattern appears</b>" \
+            --field='Choose pattern:FBTN' '@bash -c "gui_pattern_picker | sed s/^/2:/g"' \
+            --field='Pattern:' '' \
+            --field='Command to repeat while waiting::CBE' "!mouse_click!mouse_scroll down!mouse_scroll up!keyboard_type 'message'")"
+          [ $? != 0 ] && return
+          pattern="$(echo "$output" | sed -n 2p)"
+          repeat_command="$(echo "$output" | sed -n 3p)"
+          [ -z "$repeat_command" ] && repeat_command="true # <-- this was added because bash requires loops to repeat at least 1 command."
+          clipboard_set "while ! locate_pattern '$pattern' ;do"$'\n'"  $repeat_command"$'\n'"done"
+          ;;
+        pattern-wait-click)
+          output="$(yad "${yad_common[@]}" \
+            --text="$default_text"$'\n'"<b>Wait for a pattern, then click it</b>" \
+            --field='Choose pattern:FBTN' '@bash -c "gui_pattern_picker | sed s/^/2:/g"' \
+            --field='Pattern:' '' \
+            --field='Choose offset!!Instead of the center of the pattern, choose an exact point to click:FBTN' '@bash -c "gui_pick_pattern_offset %2 | sed s/^/4:/g"' \
+            --field='Offset:' 'center')"
+          [ $? != 0 ] && return
+          pattern="$(echo "$output" | sed -n 2p)"
+          offset="$(echo "$output" | sed -n 4p)"
+          clipboard_set "mouse_move "\$"(locate_pattern_retry '$pattern')"$'\n'"mouse_click"
+          ;;
+        pattern-check-once-click)
+          output="$(yad "${yad_common[@]}" \
+            --text="$default_text"$'\n'"<b>If a pattern is already there, click it</b>" \
+            --field='Choose pattern:FBTN' '@bash -c "gui_pattern_picker | sed s/^/2:/g"' \
+            --field='Pattern:' '' \
+            --field='Choose offset!!Instead of the center of the pattern, choose an exact point to click:FBTN' '@bash -c "gui_pick_pattern_offset %2 | sed s/^/4:/g"' \
+            --field='Offset:' 'center')"
+          [ $? != 0 ] && return
+          pattern="$(echo "$output" | sed -n 2p)"
+          offset="$(echo "$output" | sed -n 4p)"
+          clipboard_set "mouse_move "\$"(locate_pattern '$pattern') && mouse_click || true"
+          ;;
+        pattern-check-once-exit)
+          output="$(yad "${yad_common[@]}" \
+            --text="$default_text"$'\n'"<b>If a pattern is not already there, exit script</b>" \
+            --field='Choose pattern:FBTN' '@bash -c "gui_pattern_picker | sed s/^/2:/g"' \
+            --field='Pattern:' '' \
+            --field='Exit behavior::CB' 'Exit if pattern is not found!Exit if pattern is found')"
+          [ $? != 0 ] && return
+          pattern="$(echo "$output" | sed -n 2p)"
+          exit_behavior="$(echo "$output" | sed -n 3p)"
+          if [ "$exit_behavior" == 'Exit if pattern is not found' ];then
+            clipboard_set "if ! locate_pattern '$pattern' ;then"$'\n'"  exit 0"$'\n'"fi"
+          elif [ "$exit_behavior" == 'Exit if pattern is found' ];then
+            clipboard_set "if locate_pattern '$pattern' ;then"$'\n'"  exit 0"$'\n'"fi"
+          fi
+          ;;
+        wait-for-1-of-2)
+          output_suggested_commands() {
+            echo "!exit 0!mouse_move "\$"(locate_pattern '$pattern' center) ; mouse_click!keyboard_type 'message'"
+          }
+          output="$(yad "${yad_common[@]}" \
+            --text="$default_text"$'\n'"<b>Given 2 patterns, wait for one to appear</b>" \
+            --field='Choose pattern 1:FBTN' '@bash -c '\''pattern="$(gui_pattern_picker)" ; echo "2:$pattern" ; echo -n 3: ; output_suggested_commands'\''' \
+            --field='Pattern 1:' '' \
+            --field='If pattern 1 is seen first::CBE' "!exit 0!keyboard_type 'message'" \
+            --field='Choose pattern 2:FBTN' '@bash -c '\''pattern="$(gui_pattern_picker)" ; echo "5:$pattern" ; echo -n 6: ; output_suggested_commands'\''' \
+            --field='Pattern 2:' '' \
+            --field='If pattern 2 is seen first::CBE' "!exit 0!keyboard_type 'message'")"
+          [ $? != 0 ] && return
+          pattern1="$(echo "$output" | sed -n 2p)"
+          pattern2="$(echo "$output" | sed -n 5p)"
+          reaction1="$(echo "$output" | sed -n 3p)"
+          reaction2="$(echo "$output" | sed -n 6p)"
+          
+          if [ -z "$reaction1" ] && [ -z "$reaction2" ];then
+            #if neither pattern has an associated reaction, use a simple while loop
+            clipboard_set "while ! locate_pattern '$pattern1' && ! locate_pattern '$pattern2' ;do"$'\n'"  true"$'\n'"done"
+          else
+            [ -z "$reaction1" ] && reaction1='#pattern 1 found, exit the loop'
+            [ -z "$reaction2" ] && reaction2='#pattern 2 found, exit the loop'
+            clipboard_set "while true;do
+  if locate_pattern '$pattern1' ;then
+    $reaction1
+    break
+  elif locate_pattern '$pattern2' ;then
+    $reaction2
+    break
+  fi
+done"
+          fi
+          ;;
+        x11-subscreen|x11-headless-subscreen|wayland-subscreen|wayland-headless-subscreen)
+          case "$mode" in
+            x11-subscreen)
+              default_text+=$'\n'"<b>X11 subscreen (visible)</b>"
+              ;;
+            x11-headless-subscreen)
+              default_text+=$'\n'"<b>X11 subscreen (invisible)</b>"
+              ;;
+            wayland-subscreen)
+              default_text+=$'\n'"<b>Wayland subscreen (visible)</b>"
+              ;;
+            wayland-headless-subscreen)
+              default_text+=$'\n'"<b>Wayland subscreen (invisible)</b>"
+              ;;
+          esac
+          dimensions="$(yad "${yad_common[@]}" \
+            --text="$default_text" \
+            --field='Subscreen dimensions::CBE' '1920x1080!1366x768')"
+          [ $? != 0 ] && return
+          clipboard_set "subscreen_start $(echo "$mode" | sed 's/-subscreen$//g') $dimensions"
+          ;;
+        subscreen-stop)
+          yad "${yad_common[@]}" \
+            --text="$default_text"$'\n'"<b>Stop a running subscreen</b>"
+          [ $? != 0 ] && return
+          clipboard_set "subscreen_stop"
           ;;
       esac
     }
     #open the userscript in a text editor
-    #text_editor "$USERSCRIPT" || exit 1
+    text_editor "$USERSCRIPT" || exit 1
     yad "${yadflags[@]}" --title="Automaton script builder" --width=400 --height=500 --form --scroll \
       --text="Most of these buttons make short code snippets that drop into <a href="\""file://${USERSCRIPT}"\"">$(basename "${USERSCRIPT}")</a>." \
       --field="<big>Mouse &amp; Keyboard &amp; Clipboard</big>":LBL '' \
-      --field="Click!!Simulates a normal mouse click":FBTN "bash -c 'draft_snippet click'" \
-      --field="Right-click!!Simulates the mouse clicking its right button":FBTN "bash -c 'draft_snippet right-click'" \
-      --field="Middle-click!!Simulates the mouse clicking its scroll wheel":FBTN "bash -c 'draft_snippet middle-click'" \
-      --field="Scroll up/down!!Simulates the scroll wheel spinning":FBTN "bash -c 'draft_snippet scroll'" \
-      --field="Move mouse!!Moves the mouse pointer to exact coordinates (0,0 is the top-left corner)":FBTN "bash -c 'draft_snippet move-mouse'" \
-      --field="Type words!!Simulates the keyboard typing (ASCII characters only. Use <b>Set clipboard</b> for non-ASCII characters)":FBTN "bash -c 'draft_snippet keyboard-type'" \
+      --field="Mouse move!!Moves the mouse pointer to exact coordinates (0,0 is the top-left corner)":FBTN "bash -c 'draft_snippet move-mouse'" \
+      --field="Mouse click!!Simulates a normal mouse click":FBTN "bash -c 'draft_snippet click'" \
+      --field="Mouse scroll!!Simulates scrolling up or down":FBTN "bash -c 'draft_snippet scroll'" \
+      --field="Keyboard type!!Simulates the keyboard typing (ASCII characters only. Use <b>Set clipboard</b> for non-ASCII characters)":FBTN "bash -c 'draft_snippet keyboard-type'" \
       --field="Keyboard shortcut!!Presses combinations of keys, and other special keys":FBTN "bash -c 'draft_snippet keyboard-shortcut'" \
-      --field="Set clipboard!!Copies the text of your choice to the clipboard":FBTN "bash -c 'draft_snippet set-clipboard'" \
+      --field="Clipboard set!!Copies the text of your choice to the clipboard":FBTN "bash -c 'draft_snippet set-clipboard'" \
+      --field="Clipboard dump!!Outputs what is currently copied to the clipboard":FBTN "bash -c 'draft_snippet dump-clipboard'" \
       --field="<big>Patterns</big> (things to find on the screen)":LBL '' \
-      --field="Pattern Manager!!Create/Rename/Edit/Delete patterns for this project":FBTN '' \
-      --field="Wait for a pattern to appear!!Keeps checking for something specific appears on-screen, then proceeds":FBTN '' \
-      --field="Do something until a pattern appears!!Repeatedly clicks/scrolls/types until something specific appears on-screen":FBTN '' \
-      --field="Wait for a pattern, then click it!!Keeps checking for the chosen pattern to appear, then clicks it":FBTN '' \
-      --field="If a pattern is already there, click it!!Checks once for a pattern, clicks it if found":FBTN '' \
-      --field="Given 2 patterns, wait for one to appear!!Waits for 1 of 2 patterns to appear, behaves differently based on which one is spotted":FBTN '' \
+      --field="Pattern Manager!!Test/Edit/Rename/Delete patterns in <u>$PATTERNS_DIR</u>":FBTN '' \
+      --field="Wait for a pattern to appear!!Keeps checking until something specific appears on-screen, then proceeds":FBTN "bash -c 'draft_snippet pattern-wait'" \
+      --field="Repeat command until pattern appears!!Repeatedly clicks/scrolls/types until something specific appears on-screen":FBTN "bash -c 'draft_snippet pattern-do-wait'" \
+      --field="Wait for a pattern, then click it!!Keeps checking for the chosen pattern to appear, then clicks it":FBTN "bash -c 'draft_snippet pattern-wait-click'" \
+      --field="If a pattern is already there, click it!!Checks once for a pattern, clicks it if found, proceeds otherwise":FBTN "bash -c 'draft_snippet pattern-check-once-click'" \
+      --field="If a pattern is not already there, exit script!!Checks once for a pattern, exits the script if not found":FBTN "bash -c 'draft_snippet pattern-check-once-exit'" \
+      --field="Given 2 patterns, wait for one to appear!!Waits for 1 of 2 patterns to appear, behaves differently based on which one is spotted":FBTN "bash -c 'draft_snippet wait-for-1-of-2'" \
       --field="<big>SubScreens</big> (a virtual screen keeps things organized)":LBL '' \
-      --field="X11 subscreen (visible)!!Launches a windowed screen that all future steps will use":FBTN '' \
-      --field="X11 subscreen (invisible)!!Starts a hidden screen that all future steps will use":FBTN '' \
-      --field="Wayland subscreen (visible)!!Launches a windowed screen that all future steps will use":FBTN '' \
-      --field="Wayland subscreen (invisible)!!Starts a hidden screen that all future steps will use":FBTN '' \
-      --field="Stop a running subscreen!!Makes all future steps run in your primary screen":FBTN '' \
+      --field="X11 subscreen (visible)!!Launches a windowed screen that all future steps will use":FBTN "bash -c 'draft_snippet x11-subscreen'" \
+      --field="X11 subscreen (invisible)!!Starts a hidden screen that all future steps will use":FBTN "bash -c 'draft_snippet x11-headless-subscreen'" \
+      --field="Wayland subscreen (visible)!!Launches a windowed screen that all future steps will use":FBTN "bash -c 'draft_snippet wayland-subscreen'" \
+      --field="Wayland subscreen (invisible)!!Starts a hidden screen that all future steps will use":FBTN "bash -c 'draft_snippet wayland-headless-subscreen'" \
+      --field="Stop a running subscreen!!Makes all future steps run in your primary screen":FBTN "bash -c 'draft_snippet subscreen-stop'" \
       --field="<big>Assistance and debugging</big>":LBL '' \
       --field="Open an issue!!Report a bug or ask for help":FBTN 'x-www-browser https://github.com/Botspot/automaton/issues' \
       --field="Ask AI for scripting help!!Copies a prompting template for an anonymized ChatGPT to help you effectively use Automaton's features":FBTN 'bash -c "ask_ai"' \

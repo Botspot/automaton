@@ -13,7 +13,7 @@ trap 'if [ "$exiting_parent_function_from_error" == 1 ] && [ ${#FUNCNAME[@]} -gt
 
 #correct behavior of error: break out of only its parent function, not all layers, not the script, just make the function that ran it return 1.
 #or if error is run in the script, exit the script.
-error() {
+error() { #echo an error message in red text, and make the parent process (script or function) exit 1. Place "|| error '<explanation>'" at the end of ALL commands where success is necessary for proper function.
   echo -e "\e[91m$1\e[39m" 1>&2
   
   #if error is being run within another function, and we're not inside of api being sourced, and the trap payload that makes the parent function exit, then return 1
@@ -66,7 +66,7 @@ screenshot_fullscreen() { #take a screenshot of the full screen, save it to $1 p
   fi
 }
 
-crop_image() { #given a $1 png image, crop it to $2 rectangle coordinates (X,Y +W+H), and save to "$3"
+crop_image() { #given a $1 png image, crop it to $2 rectangle coordinates (X,Y +W+H), and save to $3
   local inputfile="$1"
   local cropregion="$2"
   local outputfile="$3"
@@ -91,8 +91,10 @@ crop_image() { #given a $1 png image, crop it to $2 rectangle coordinates (X,Y +
   fi
 }
 
-locator_start() { #start python opencv process that waits for targets on screen to find
-  [ ! -z "$locator_pipe" ] || error 'locator_start(): $locator_pipe is not set! This should have been set when sourcing the automaton api.'
+locator_start() { #start python opencv process that waits for targets on screen to find. Takes no arguments.
+  if [ -z "$locator_pipe" ];then
+    error 'locator_start(): $locator_pipe is not set! This should have been set when sourcing the automaton api.'
+  fi
   
   rm -f "$locator_pipe" "${locator_pipe}.out" || error "locator_start(): Failed to first remove '$locator_pipe' file!"
   
@@ -103,16 +105,19 @@ locator_start() { #start python opencv process that waits for targets on screen 
   timeout 10 bash -c "wait_for_file_creation '$locator_pipe.out'" || error "locator.py failed to initialize within 10 seconds. Please refer to errors above."
 }
 
-locator_stop() {
+locator_stop() { #stops python opencv process that waits for targets on screen to find. Takes no arguments.
   rm -f "$locator_pipe" || error "locator_stop(): Failed to remove '$locator_pipe'!"
   rm -f "${locator_pipe}.out" || error "locator_stop(): Failed to remove '${locator_pipe}.out'!"
 }
 
-locate_pattern() { #locate where on the screen the specified target is. (X,Y) No output if not found.
+locate_pattern() { #locate where on the screen the $1 pattern is, using opencv. $2 is optional offset argument in the form of +x+y, or a special offset 'center' which finds the midpoint of the pattern. Outputs X,Y. Exits with a stderr error message and exitcode 1, and no stdout output, if pattern not found. (set locate_pattern_stop_complaining=1 to hide the error)
   #pattern filename to look for (assumed to be saved in project folder)
   local pattern="$PATTERNS_DIR/$1"
-  [ -f "$pattern" ] || error "locate_pattern(): screenshot png file at '$pattern' not found!"
-  [ -p "$locator_pipe" ] || error "locate_pattern(): locator_start must be run first! ($locator_pipe does not exist)"
+  if [ ! -f "$pattern" ];then
+    error "locate_pattern(): pattern png file at '$pattern' not found!"
+  elif [ ! -p "$locator_pipe" ];then
+    error "locate_pattern(): locator_start must be run first! ($locator_pipe does not exist)"
+  fi
   
   #pixel offset provided ahead of time. Format: +X+Y
   if [[ "$2" == '+'* ]];then
@@ -158,24 +163,25 @@ locate_pattern() { #locate where on the screen the specified target is. (X,Y) No
     rm -f "$screenshot"
     #message user that pattern could not be found, UNLESS this function is being run by locate_pattern_retry
     local IFS=' '
-    if [[ " ${FUNCNAME[*]} " =~ " locate_pattern_retry " ]]; then
+    if [ "$locate_pattern_stop_complaining" == 1 ];then
       #avoid spamming, while allowing other error messages to go unhindered
       return 1
     else
-      #run in parenthesis so it acts as return 1, not exit 1
+      #run in parenthesis to ensure it acts as return 1, not exit 1, even though it should be return 1 with the trap trick
       (error "locate_pattern(): failed to find '$1' on screen.")
     fi
   fi
 }
 
-locate_pattern_retry() {
+locate_pattern_retry() { #runs locate_pattern repeatedly until it succeeds. locate_pattern inherits all arguments, stdout/stderr is passed on.
   echo "Waiting to locate pattern '$1'... " 1>&2
+  local locate_pattern_stop_complaining=1
   while ! locate_pattern "$@" ;do
     true
   done
 }
 
-mouse_move() { #move mouse to absolute position $1 (format X,Y)
+mouse_move() { #move mouse to absolute position $1 (format X,Y). Rather than specify raw coordinates, use something like $(locate_pattern button.png center). Also, if applicable, don't forget to mouse_click after moving the mouse!
   local IFS=' '
   [ -z "$1" ] && error "mouse_move(): no input coordinates"
   if [ "$XDG_SESSION_TYPE" == x11 ];then
@@ -213,34 +219,33 @@ mouse_middle_click() { #mouse press the scroll wheel
   fi
 }
 
-mouse_scroll_down() { #scroll down $1 times (once if not specified)
-  local scrolltimes="$1"
+mouse_scroll() { #scroll $1=[up/down] $2 times (scroll once if $2 not specified)
+  local scrolldirection="$1"
+  local scrolltimes="$2"
   if [ -z "$scrolltimes" ];then
     scrolltimes=1 #default value 1 if not set
   fi
   
-  if [ "$XDG_SESSION_TYPE" == x11 ];then
-    for ((n=0;n<$scrolltimes;n++)); do
-      xdotool click 5
-    done
-  elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    wlrctl pointer scroll $((15*scrolltimes))
-  fi
-  sleep 0.5s #browsers animate after scroll event, so wait for it to finish
-}
-
-mouse_scroll_up() { #scroll up $1 times (once if not specified)
-  local scrolltimes="$1"
-  if [ -z "$scrolltimes" ];then
-    scrolltimes=1 #default value 1 if not set
-  fi
-  
-  if [ "$XDG_SESSION_TYPE" == x11 ];then
-    for ((n=0;n<$scrolltimes;n++)); do
-      xdotool click 4
-    done
-  elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    wlrctl pointer scroll $((-15*scrolltimes))
+  if [ "$scrolldirection" == down ];then
+    #scroll down
+    if [ "$XDG_SESSION_TYPE" == x11 ];then
+      for ((n=0;n<$scrolltimes;n++)); do
+        xdotool click 5
+      done
+    elif [ "$XDG_SESSION_TYPE" == wayland ];then
+      wlrctl pointer scroll $((15*scrolltimes))
+    fi
+  elif [ "$scrolldirection" == up ];then
+    #scroll up
+    if [ "$XDG_SESSION_TYPE" == x11 ];then
+      for ((n=0;n<$scrolltimes;n++)); do
+        xdotool click 4
+      done
+    elif [ "$XDG_SESSION_TYPE" == wayland ];then
+      wlrctl pointer scroll $((-15*scrolltimes))
+    fi
+  else
+    error "mouse_scroll(): first argument must be 'up' or 'down'. Got '$1'"
   fi
   sleep 0.5s #browsers animate after scroll event, so wait for it to finish
 }
@@ -249,7 +254,15 @@ clipboard_set() { #copy text in $1 to the primary clipboard
   if [ "$XDG_SESSION_TYPE" == x11 ];then
     echo -n "$1" | xclip -i -selection clipboard
   elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    echo -n "$1" | wl-copy -f
+    echo -n "$1" | wl-copy
+  fi
+}
+
+clipboard_dump() { #output the contents of the primary clipboard to stdout
+  if [ "$XDG_SESSION_TYPE" == x11 ];then
+    xclip -o -selection clipboard
+  elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    wl-paste
   fi
 }
 
@@ -261,57 +274,73 @@ keyboard_type() { #type text in $1 with the keyboard
   fi
 }
 
-keyboard_shortcut() { #press multiple keys at once, and special keys (one argument per key, as any delimiter used prevents that key from being used)
-  local IFS='+'
-  local wlrctl_modifiers=''
-  local wlrctl_letterss=''
+keyboard_shortcut() { #press multiple keys at once, and special keys. one argument per key. Example: keyboard_shortcut Ctrl Alt a (VERY IMPORTANT: keyboard_shortcut accepts ONLY: Ctrl, Shift, Alt, Super, Enter, Tab, Escape, Backspace, Space, and ASCII characters. Anything not in that list, including F1,F2,F3,F4,F5,F6,F7,F8,F9,F10,F11,F12, will be treated as individual literal letters. For example 'keyboard_shortcut Alt F4' will not press Alt+F4, it will press and hold Alt while typing the letter F and the number 4. To close a window, use Ctrl w, Ctrl q, Escape, or click a close button.)
+  local wlrctl_modifiers=""
+  local wlrctl_letters=""
+  local x_key_combo=""
   while [ $# -gt 0 ]; do
     case "$1" in
       Ctrl)
         wlrctl_modifiers+=",CTRL"
+        x_key_combo+="+ctrl"
         ;;
       Shift)
         wlrctl_modifiers+=",SHIFT"
+        x_key_combo+="+shift"
         ;;
       Alt)
         wlrctl_modifiers+=",ALT"
+        x_key_combo+="+alt"
         ;;
       Super)
         wlrctl_modifiers+=",SUPER"
+        x_key_combo+="+super"
         ;;
       Tab)
         wlrctl_letters+=$'\t'
+        x_key_combo+="+Tab"
         ;;
       Escape)
         wlrctl_letters+=$'\e'
+        x_key_combo+="+Escape"
         ;;
       Backspace)
         wlrctl_letters+=$'\b'
+        x_key_combo+="+BackSpace"
         ;;
       Enter)
         wlrctl_letters+=$'\n'
+        x_key_combo+="+Return"
+        ;;
+      Space)
+        wlrctl_letters+=' '
+        x_key_combo+="+space"
         ;;
       *)
-        wlrctl_letters+="$key"
+        wlrctl_letters+="$1"
+        x_key_combo+="+${1}"
         ;;
     esac
     shift
   done
-  if [ "$XDG_SESSION_TYPE" == x11 ];then
-    #botspot finish this
-    echo -n "$1" | xdotool type --file -
-  elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    if [ -z "$wlrctl_letters" ];then
+  if [ "$XDG_SESSION_TYPE" = x11 ]; then
+    if [ -z "$x_key_combo" ]; then
+      error "On X11, xdotool requires a key combination to use at least 1 key."
+    else
+      xdotool key "${x_key_combo#+}"
+    fi
+  elif [ "$XDG_SESSION_TYPE" = wayland ]; then
+    if [ -z "$wlrctl_letters" ]; then
       error "On Wayland, wlrctl requires a key combination to use at least 1 key that is NOT one of the following keys: Ctrl, Shift, Alt, Super."
-    elif [ ! -z "$wlrctl_modifiers" ];then
-      wlrctl type "$wlrctl_letters" modifiers "$(echo "$wlrctl_modifiers" | sed 's/^,//g')"
+    elif [ -n "$wlrctl_modifiers" ]; then
+      wlrctl type "$wlrctl_letters" modifiers "${wlrctl_modifiers#,}"
     else
       wlrctl type "$wlrctl_letters"
     fi
   fi
 }
 
-subscreen_start() { #start a nested x or wayland display (must be specified)
+subscreen_start() { #start a nested x or wayland display (type must be specified in $1: x11, x11-headless, wayland, wayland-headless)
   local display_type="$1"
   local display_dimensions="$2"
   
@@ -412,7 +441,7 @@ subscreen_start() { #start a nested x or wayland display (must be specified)
   trap "subscreen_stop" EXIT SIGINT
 }
 
-subscreen_stop() {
+subscreen_stop() { #stop a running subscreen. Takes no arguments.
   kill $subscreen_pid 2>/dev/null || true
   export DISPLAY="$original_DISPLAY"
   export WAYLAND_DISPLAY="$original_WAYLAND_DISPLAY"
