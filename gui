@@ -352,7 +352,7 @@ text_editor() { #Open user-preferred text editor. $1 is file to open (function a
 }
 
 update_check() { #check for updates and reload the script if necessary
-  localhash="$(cd "$DIRECTORY" ; git rev-parse HEAD)"
+  localhash="$(cd "$AUTOMATON_DIR" ; git rev-parse HEAD)"
   latesthash="$(git ls-remote https://github.com/Botspot/automaton HEAD | awk '{print $1}')"
   if [ "$localhash" != "$latesthash" ] && [ ! -z "$latesthash" ] && [ ! -z "$localhash" ];then
     if [ "$disable_updates" == true ];then
@@ -360,7 +360,7 @@ update_check() { #check for updates and reload the script if necessary
       return 0
     fi
     echo "Auto-updating Automaton for the latest features and improvements..."
-    (cd "$DIRECTORY"
+    (cd "$AUTOMATON_DIR"
     git restore . #abandon changes to tracked files (otherwise users who modified this script are left behind)
     git -c color.ui=always pull | cat #piping through cat makes git noninteractive
     return "${PIPESTATUS[0]}")
@@ -482,6 +482,7 @@ case "$mode" in
       --field='Script::RO' "$(echo "$USERSCRIPT" | sed "s+$HOME+~+g")" \
       --field='Patterns Folder::RO' "$(echo "$PATTERNS_DIR" | sed "s+$HOME+~+g")" \
       --button='Open this project':0)"
+    [ $? != 0 ] && exit 0
     USERSCRIPT="$(echo "$output" | sed -n 3p | sed "s+~+$HOME+g")"
     PATTERNS_DIR="$(echo "$output" | sed -n 4p | sed "s+~+$HOME+g")"
     
@@ -691,7 +692,7 @@ Start your initial response with "\""<name of ai model> here. I am good at bash 
           [ $? != 0 ] && return
           pattern="$(echo "$output" | sed -n 2p)"
           offset="$(echo "$output" | sed -n 4p)"
-          clipboard_set "mouse_move "\$"(locate_pattern_retry '$pattern')"$'\n'"mouse_click"
+          clipboard_set "mouse_move "\$"(locate_pattern_retry '$pattern' '$offset')"$'\n'"mouse_click"
           ;;
         pattern-check-once-click)
           output="$(yad "${yad_common[@]}" \
@@ -703,7 +704,7 @@ Start your initial response with "\""<name of ai model> here. I am good at bash 
           [ $? != 0 ] && return
           pattern="$(echo "$output" | sed -n 2p)"
           offset="$(echo "$output" | sed -n 4p)"
-          clipboard_set "mouse_move "\$"(locate_pattern '$pattern') && mouse_click || true"
+          clipboard_set "mouse_move "\$"(locate_pattern '$pattern' '$offset') && mouse_click || true"
           ;;
         pattern-check-once-exit)
           output="$(yad "${yad_common[@]}" \
