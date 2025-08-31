@@ -5,6 +5,11 @@ AUTOMATON_DIR="$(readlink -f "$(dirname "$0")")"
 source "$AUTOMATON_DIR/api" || exit 1
 
 #functions defined below are not available to userscripts.
+yad() { #hide annoying wayland error
+  command yad "$@" 2> >(grep --line-buffered -vF "'GDK_IS_X11_WINDOW (window)' failed" 1>&2)
+  return "${PIPESTATUS[0]}"
+}
+
 gui_pick_region() { #use region-picker.py to pick a rectangular region of the $1 image, outputs rectangle coordinates (X,Y +W+H)
   if [ ! -f "$1" ];then
     error "gui_pick_region(): provided image '$1' does not exist!"
