@@ -476,16 +476,18 @@ case "$mode" in
       echo "4:$PATTERNS_DIR" | sed "s+$HOME+~+g"
     }
     
-    output="$(yad "${yadflags[@]}" --width=400 --form \
-      --field='New Automaton project':FBTN "@bash -c 'yad_new_project_wizard'" \
-      --field='Choose existing project':FBTN "@bash -c 'yad_existing_project_wizard'" \
-      --field='Script::RO' "$(echo "$USERSCRIPT" | sed "s+$HOME+~+g")" \
-      --field='Patterns Folder::RO' "$(echo "$PATTERNS_DIR" | sed "s+$HOME+~+g")" \
-      --button='Open this project':0)"
-    [ $? != 0 ] && exit 0
-    USERSCRIPT="$(echo "$output" | sed -n 3p | sed "s+~+$HOME+g")"
-    PATTERNS_DIR="$(echo "$output" | sed -n 4p | sed "s+~+$HOME+g")"
-    
+    while [ -z "$USERSCRIPT" ] || [ -z "$PATTERNS_DIR" ];do
+      output="$(yad "${yadflags[@]}" --width=400 --form \
+        --field='New Automaton project':FBTN "@bash -c 'yad_new_project_wizard'" \
+        --field='Choose existing project':FBTN "@bash -c 'yad_existing_project_wizard'" \
+        --field='Script::RO' "$(echo "$USERSCRIPT" | sed "s+$HOME+~+g")" \
+        --field='Patterns Folder::RO' "$(echo "$PATTERNS_DIR" | sed "s+$HOME+~+g")" \
+        --button='Open this project':0)"
+      [ $? != 0 ] && exit 0
+      USERSCRIPT="$(echo "$output" | sed -n 3p | sed "s+~+$HOME+g")"
+      PATTERNS_DIR="$(echo "$output" | sed -n 4p | sed "s+~+$HOME+g")"
+      
+    done
     #save new values to config file for next time
     echo "$USERSCRIPT"$'\n'"$PATTERNS_DIR" > "$current_project_config_file"
     
