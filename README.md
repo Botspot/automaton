@@ -34,13 +34,20 @@ Automaton is here to help give this power to anybody, even beginners.
 - And use the ChatGPT template to get guided scripting assistance.
 
 ## Get started:
-Use any Debian flavored Linux distro. This should still work on non-debian distros, but the script will ask you to install needed dependencies manually.  
-Ubuntu, Raspberry Pi OS, Pop!OS are tested to work. x86_64 and arm64 CPU architectures are tested to work.
 ```
 git clone https://github.com/Botspot/automaton
 ./automaton/gui
 ```
+## Supported platforms:
+
+- Any Debian flavored Linux distro with a X11 or wlroots wayland desktop environment (x86_64, or arm64)
+- Headless or server usage is supported. Just use an invisible subscreen to run everything inside a headless isolated graphics environment.
+- GNOME Wayland, or other Wayland desktop not based on wlroots: Use a subscreen. Most of the functions would need an extra case to handle these environments. (non-wlroots environments have their own ways of moving the mouse, taking screenshots, etc)
+- This should still work on non-Debian distros, but the script will ask you to install needed dependencies manually.
+
 ## Usage:
+In simple terms, Automaton provides you with a variety of bash functions. These functions run just like normal linux commands, and can work together in a script to do just about anything.
+
 Since nobody enjoys reading documentation, I'm trying a new approach: **the graphical interface *is* the documentation.**  
 ![screenshot](https://github.com/user-attachments/assets/bfb2dfea-9fb3-42b0-8dec-8b45ab450ca0)  
 These buttons help generate premade chunks of working code. Simply click one, adjust any options it may have, and then paste the code chunk into your script.  
