@@ -7,9 +7,9 @@ Automate any task on Linux with computer vision
 
 Let's say you need a _complex computer task_ to be done so many times that no human would willingly sit down and do it by hand.
 - Every day, check a list of tracking numbers and fill out complaint forms for missing packages.
-- Every hour, refresh a website to track the number of views/likes/comments to a spreadsheet.
-- Every minute, check a youtube channel for new videos and download any new ones found.
-- Every 10 seconds, track the price of a stock.
+- Every hour, check a youtube channel for new videos and download any new ones found.
+- Every minute, refresh a website to track the number of views/likes/comments to a spreadsheet.
+- Every 10 seconds, check the value of a currency/crypto/stock and log it to a file.
 
 How will you automate it? Most people would try to approach it 1 of 2 ways:
 
