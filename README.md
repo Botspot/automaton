@@ -10,7 +10,9 @@ Let's say you need a _complex computer task_ to be done so many times that no hu
 - Every hour, refresh a website to track the number of views/likes/comments to a spreadsheet.
 - Every minute, check a youtube channel for new videos and download any new ones found.
 - Every 10 seconds, track the price of a stock.
-How will you automate it? Most people would try to approach it 1 of 2 ways:  
+
+How will you automate it? Most people would try to approach it 1 of 2 ways:
+
 1. Build a custom program, use APIs (assuming they exist), might involve reverse-engineering websites or programs.
    - Reliability: **HIGH**
    - Difficulty: **HIGH**
