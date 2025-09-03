@@ -22,7 +22,7 @@ How will you automate it? Most people would try to approach it 1 of 2 ways:
    - Difficulty: **LOW**
    - Development time: **MEDIUM** (needs continual monitoring and maintenance)
 
-3. Automaton offers a third option: **localized computer vision**.
+3. Automaton offers a third option: **localized computer vision**. With it, any shell script can "see" the screen and perform tasks using the mouse and keyboard.
    - Reliability: **HIGH**
    - Difficulty: **LOW**
    - Development time: **LOW**
