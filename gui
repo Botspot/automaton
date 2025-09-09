@@ -190,7 +190,7 @@ gui_pattern_manager() { #Test/Edit/Rename/Delete patterns in $PATTERNS_DIR
       echo "$PATTERNS_DIR/$filename"$'\n'"$filename"
     done | yad "${yadflags[@]}" --title "Automaton Pattern Manager" --width 450 --height=300 --list --no-headers --column=:IMG --column=Name --listen --item-width 100 --single-click \
       --text="Select a pattern, then choose an action to apply to it." \
-      --button="Cancel!!Exit Pattern Manager:1" \
+      --button="Exit!!Exit Pattern Manager:1" \
       --button="Delete!!Remove this pattern:6" \
       --button="Rename!!Keep this pattern but change its filename:2" \
       --button="Edit!!Choose any screenshot and a region to crop for this pattern:4" \
@@ -807,7 +807,7 @@ done"
       --field="Clipboard set!!Copies the text of your choice to the clipboard":FBTN "bash -c 'draft_snippet set-clipboard'" \
       --field="Clipboard dump!!Outputs what is currently copied to the clipboard":FBTN "bash -c 'draft_snippet dump-clipboard'" \
       --field="<big>Patterns</big> (things to find on the screen)":LBL '' \
-      --field="Pattern Manager!!Test/Edit/Rename/Delete patterns in <u>$PATTERNS_DIR</u>":FBTN '' \
+      --field="Pattern Manager!!Test/Edit/Rename/Delete patterns in <u>$PATTERNS_DIR</u>":FBTN "bash -c 'gui_pattern_manager'" \
       --field="Wait for a pattern to appear!!Keeps checking until something specific appears on-screen, then proceeds":FBTN "bash -c 'draft_snippet pattern-wait'" \
       --field="Repeat command until pattern appears!!Repeatedly clicks/scrolls/types until something specific appears on-screen":FBTN "bash -c 'draft_snippet pattern-do-wait'" \
       --field="Wait for a pattern, then click it!!Keeps checking for the chosen pattern to appear, then clicks it":FBTN "bash -c 'draft_snippet pattern-wait-click'" \
