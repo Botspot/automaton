@@ -270,7 +270,7 @@ keyboard_type() { #type text in $1 with the keyboard
   if [ "$XDG_SESSION_TYPE" == x11 ];then
     echo -n "$1" | xdotool type --file -
   elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    wlrctl type "$1"
+    wlrctl keyboard type "$1"
   fi
 }
 
