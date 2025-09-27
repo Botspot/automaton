@@ -184,20 +184,21 @@ FALSE"
 }
 
 gui_pattern_manager() { #Test/Edit/Rename/Delete patterns in $PATTERNS_DIR
+  yadflags=(--title=Automaton --class=automaton --name=automaton --center --separator='\n')
   while true;do
     output="$(find "$PATTERNS_DIR" -name '*.png' | sort | sed 's+.*/++g' | \
     while read filename ;do
       echo "$PATTERNS_DIR/$filename"$'\n'"$filename"
     done | yad "${yadflags[@]}" --title "Automaton Pattern Manager" --width 450 --height=300 --list --no-headers --column=:IMG --column=Name --listen --item-width 100 --single-click \
       --text="Select a pattern, then choose an action to apply to it." \
-      --button="Exit!!Exit Pattern Manager:1" \
+      --button="New!!Create a new pattern:8" \
       --button="Delete!!Remove this pattern:6" \
       --button="Rename!!Keep this pattern but change its filename:2" \
       --button="Edit!!Choose any screenshot and a region to crop for this pattern:4" \
       --button="Test!!Monitor in real time if the pattern is found on the screen:0" )"
     button=$?
     pattern="$(echo "$output" | sed -n 2p)"
-    if [ -z "$pattern" ];then
+    if [ -z "$pattern" ] && [ "$button" != 8 ];then
       error "gui_pattern_manager(): user exited without selecting anything"
     fi
     case $button in
@@ -223,6 +224,9 @@ gui_pattern_manager() { #Test/Edit/Rename/Delete patterns in $PATTERNS_DIR
       6) #delete pattern
         sed -i "/^$final_filename\t/d" "$PATTERNS_DIR/screenshot-regions.tsv"
         rm -f "$PATTERNS_DIR/$pattern"
+        ;;
+      8) #new battern
+        gui_make_pattern "$(gui_screenshot_picker)"
         ;;
     esac
   done
