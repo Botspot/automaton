@@ -426,7 +426,6 @@ subscreen_start() { #start a nested x or wayland display (type must be specified
         elif [[ "$line" == WESTON_CONFIG_FILE=* ]];then
           break #we have reached the end of useful env output, DISPLAY and WAYLAND_DISPLAY have already been set, so exit and leave weston running as a background process
         fi
-        export "$line" #export the variable that weston informed us of
         #to run weston on RPi with GPU acceleration, add MESA_LOADER_DRIVER_OVERRIDE=v3d and remove --use-pixman
         #weston version (on bookworm at least) does not support running a program directly on the command-line, or --renderer=pixman
       done < <(weston "${westonbackend[@]}" --width="$display_width" --height="$display_height" --use-pixman --xwayland -c "${AUTOMATON_DIR}/weston.ini" & subscreen_pid=$! ; echo "subscreen_pid=$subscreen_pid" ; wait $subscreen_pid)
