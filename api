@@ -61,16 +61,11 @@ screenshot_fullscreen() { #take a screenshot of the full screen, save it to $1 p
   
   if [ "$XDG_SESSION_TYPE" == x11 ];then
     scrot -zoF "$1" || error "screenshot_fullscreen(): failed, please review errors above"
-  elif [ "$XDG_SESSION_TYPE" == wayland ] && [ ! -z "$WESTON_CONFIG_FILE" ];then
-    #grim doesn't work on weston, and this tool is stupid and does not honor a filename.
-    # First make a folder to save the screenshot into
-    mkdir -p "$1.folder" || error "screenshot_fullscreen(): failed to make tmpdir for weston-screenshooter"
-    cd "$1.folder"
-    weston-screenshooter || error "screenshot_fullscreen(): failed, please review errors above"
-    mv "$1.folder"/* "$1"
-    rmdir "$1.folder" || error "screenshot_fullscreen(): failed to remove tmpdir for weston-screenshooter"
   elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    (sleep 2; warning "screenshot_fullscreen(): this is taking longer than expected. Most likely your wayland subscreen is not visible to your real screen, making it skip rendering. Please make the window visible, or switch to a headless subscreen.") &
+    local warning_pid=$!
     grim "$1" || error "screenshot_fullscreen(): failed, please review errors above"
+    kill $warning_pid 2>/dev/null || status_green "screenshot_fullscreen(): Screenshot succeeded. Proceeding..."
   else
     error "screenshot_fullscreen(): XDG_SESSION_TYPE needs to be set to either 'x11' or 'wayland'"
   fi
@@ -150,7 +145,7 @@ locate_pattern() { #locate where on the screen the $1 pattern is, using opencv. 
   #echo "offset is $offset" 1>&2
   
   #save temporary screenshot to RAM - name it something unique for this script by using the full path of patterns directory, with '/' replaced with '-'
-  local screenshot="$RAM_LOCATION/automaton-${pattern//\//-}.png"
+  local screenshot="$RAM_LOCATION/automaton-${my_pid}.png"
   screenshot_fullscreen "$screenshot" || return 1
   
   echo -e "$pattern\t$screenshot" > "$locator_pipe" #this will block until locator reads it
@@ -200,12 +195,12 @@ mouse_move() { #move mouse to absolute position $1 (format X,Y). Rather than spe
   [ -z "$1" ] && error "mouse_move(): no input coordinates"
   if [ "$XDG_SESSION_TYPE" == x11 ];then
     #xdotool allows absolute mouse movements
-    xdotool mousemove --sync $(echo "$1" | tr ',' ' ')
+    xdotool mousemove --sync $(echo "$1" | tr ',' ' ') || error "mouse_move(): xdotool failed to move the mouse"
   elif [ "$XDG_SESSION_TYPE" == wayland ];then
     #wlrctl only allows relative movements, so move to top left corner first
     wlrctl pointer move -1000000 -1000000
     #and then move to desired location, replacing ',' with space
-    wlrctl pointer move $(echo "$1" | tr ',' ' ')
+    wlrctl pointer move $(echo "$1" | tr ',' ' ') || error "mouse_move(): wlrctl failed to move the mouse"
   fi
 }
 
@@ -370,8 +365,6 @@ subscreen_start() { #start a nested x or wayland display (type must be specified
     error "subscreen(): display dimensions not set correctly! Value was: '$display_dimensions'"
   fi
   
-  #weston can run x11 in wayland, wayland in x11, wayland in wayland, and x11 in x11. Splendid!!
-  #it also autodetects unoccupied x11 and wayland displays, (unlike Xephyr/Xvfb) preventing these from needing to be handled here.
   case "$display_type" in
     x11|x11-headless)
       #find an unoccupied x display to use
@@ -416,38 +409,59 @@ subscreen_start() { #start a nested x or wayland display (type must be specified
     wayland|wayland-headless)
       #wayland nested display
       
-      #determine which backend to use (the environment in which weston runs)
-      local weston_backend=()
+      #determine which backend to use (the environment in which sway runs)
+      local wlr_backend
       if [ "$display_type" == wayland-headless ];then
-        weston_backend=(--backend="headless-backend.so")
+        wlr_backend="headless"
       elif [ "$XDG_SESSION_TYPE" == x11 ];then
-        weston_backend=(--backend="x11-backend.so")
+        wlr_backend="x11"
       elif [ "$XDG_SESSION_TYPE" == wayland ];then
-        weston_backend=(--backend="wayland-backend.so")
+        wlr_backend="wayland"
       else
         error "subscreen_start(): Seems like your system is headless. (no wayland or x11 desktop session found)\nTo run this function headless, use the 'wayland-headless' mode."
       fi
       
-      #run weston, which runs env, so capture the new values of DISPLAY and WAYLAND_DISPLAY and export them 
+      #determine output name for config
+      local output_name
+      case "$wlr_backend" in
+        headless) output_name="HEADLESS-1" ;;
+        x11) output_name="X11-1" ;;
+        wayland) output_name="WAYLAND-1" ;;
+      esac
+      
+      #create temporary sway config with resolution and startup echoes
+      if [ -z "$sway_config" ];then
+        error "start_subscreen(): sway_config should have been set when sourcing api"
+      fi
+      echo "output $output_name mode ${display_width}x${display_height}"'\
+
+default_border none
+exec echo "WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
+exec echo "DISPLAY=$DISPLAY"
+exec echo "sway_ready"' >> "$sway_config"
+      #if there's a base config, you could include it: echo "include ${AUTOMATON_DIR}/sway.ini" at top
+      
+      #run sway, capture output to get the env variables
+      local sway_succeeded=0
       while read line ;do
-        #echo "line is $line"
         if [[ "$line" == WAYLAND_DISPLAY=* ]] || [[ "$line" == DISPLAY=* ]];then
-          export "$line" #export the variable that weston informed us of
+          export "$line" #export the variable that sway informed us of
           
         elif [[ "$line" == subscreen_pid=* ]];then
           export "$line" #export subscreen_pid for subscreen_stop
           
-        elif [[ "$line" == WESTON_CONFIG_FILE=* ]];then
-          #if weston got far enough to run env, it did not fail
-          export "$line"
-          break #we have reached the end of useful env output, DISPLAY and WAYLAND_DISPLAY have already been set, so exit and leave weston running as a background process
+        elif [[ "$line" == sway_ready ]];then
+          #if sway got far enough to run the execs, it did not fail
+          sway_succeeded=1
+          break #we have reached the end of useful output, DISPLAY and WAYLAND_DISPLAY have already been set, so exit and leave sway running as a background process
         fi
-        #to run weston on RPi with GPU acceleration, add MESA_LOADER_DRIVER_OVERRIDE=v3d and remove --use-pixman
-        #weston version (on bookworm at least) does not support running a program directly on the command-line, or --renderer=pixman. --debug is there to allow taking screenshots
-      done < <(weston "${westonbackend[@]}" --width="$display_width" --height="$display_height" --use-pixman --debug --xwayland -c "${AUTOMATON_DIR}/weston.ini" & subscreen_pid=$! ; echo "subscreen_pid=$subscreen_pid" ; wait $subscreen_pid)
-      if [ -z "$WESTON_CONFIG_FILE" ];then
-        error "subscreen_start(): Weston failed to start! Please review errors above."
+        #use sway because it is the only wayland compositor that works in nested mode on pi os (rules out wayfire), while being available on ubuntu repos (rules out labwc), while being based on wlroots (rules out mutter)
+      done < <(WLR_BACKEND="$wlr_backend" WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 WLR_RENDERER_FORCE_SOFTWARE=1 sway -c "$sway_config" & subscreen_pid=$! ; echo "subscreen_pid=$subscreen_pid" ; wait $subscreen_pid)
+      rm "$sway_config"
+      if [ "$sway_succeeded" == 0 ];then
+        error "subscreen_start(): Sway failed to start! Please review errors above."
       fi
+      export XDG_SESSION_TYPE=wayland
       ;;
     *)
       error "subscreen(): not sure if you need a X11 or Wayland display, headless or not.\nPlease use 1 of the following 4 arguments: x11, x11-headless, wayland, wayland-headless"
@@ -461,6 +475,7 @@ subscreen_start() { #start a nested x or wayland display (type must be specified
 
 subscreen_stop() { #stop a running subscreen. Takes no arguments.
   kill $subscreen_pid 2>/dev/null || true
+  rm -f "$sway_config"
   export DISPLAY="$original_DISPLAY"
   export WAYLAND_DISPLAY="$original_WAYLAND_DISPLAY"
   export XDG_SESSION_TYPE="$original_XDG_SESSION_TYPE"
@@ -483,15 +498,12 @@ else
 fi
 #other variables that we want global to modify later within functions:
 subscreen_pid=''
+my_pid=$$
 #keep original values to these variables for subscreen_stop()
 original_DISPLAY="$DISPLAY"
 original_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"
 original_XDG_SESSION_TYPE="$XDG_SESSION_TYPE"
-if [ -z "$WESTON_CONFIG_FILE" ];then
-  #to ensure the right screenshot tool is run, make this a global variable to be set by subscreen_start
-  # but keep original value if toplevel wayland session happens to be weston
-  WESTON_CONFIG_FILE=''
-fi
+sway_config="$RAM_LOCATION/sway_config_${my_pid}.ini"
 
 #install dependencies
 install_list=()
@@ -527,8 +539,8 @@ if [ "$SKIP_INSTALLING_SUBSCREEN_DEPS" != 1 ];then
   if ! command -v Xephyr >/dev/null ;then
     install_list+=('xserver-xephyr')
   fi
-  if ! command -v weston >/dev/null ;then
-    install_list+=('weston')
+  if ! command -v sway >/dev/null ;then
+    install_list+=('sway')
   fi
   if ! command -v openbox >/dev/null ;then
     install_list+=('openbox')
