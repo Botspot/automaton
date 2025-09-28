@@ -128,6 +128,12 @@ locate_pattern() { #locate where on the screen the $1 pattern is, using opencv. 
     error "locate_pattern(): locator_start must be run first! ($locator_pipe does not exist)"
   fi
   
+  #wayland screenshots on Pi OS at least keep the mouse in view for some reason, so move the mouse to the bottom right corner if running in a subscreen
+  if [ "$XDG_SESSION_TYPE" == wayland ] && [ "$original_DISPLAY" != "$DISPLAY" ];then
+    #moving the mouse in the main screen would compromise UX too much
+    wlrctl pointer move 1000000 1000000
+  fi
+  
   #pixel offset provided ahead of time. Format: +X+Y
   if [[ "$2" == '+'* ]];then
     local offset="$2"
@@ -191,16 +197,19 @@ locate_pattern_retry() { #runs locate_pattern repeatedly until it succeeds. loca
 }
 
 mouse_move() { #move mouse to absolute position $1 (format X,Y). Rather than specify raw coordinates, use something like $(locate_pattern button.png center). Also, if applicable, don't forget to mouse_click after moving the mouse!
-  local IFS=' '
-  [ -z "$1" ] && error "mouse_move(): no input coordinates"
+  local IFS=' ' #ensure the $() gets split into 2 arguments
+  local coordinates="$(echo "$1" | awk '{print $1}')"
+  if [ -z "$coordinates" ];then
+    error "mouse_move(): no input coordinates"
+  fi
   if [ "$XDG_SESSION_TYPE" == x11 ];then
     #xdotool allows absolute mouse movements
-    xdotool mousemove --sync $(echo "$1" | tr ',' ' ') || error "mouse_move(): xdotool failed to move the mouse"
+    xdotool mousemove --sync $(echo "$coordinates" | tr ',' ' ') || error "mouse_move(): xdotool failed to move the mouse to '$coordinates'"
   elif [ "$XDG_SESSION_TYPE" == wayland ];then
     #wlrctl only allows relative movements, so move to top left corner first
     wlrctl pointer move -1000000 -1000000
     #and then move to desired location, replacing ',' with space
-    wlrctl pointer move $(echo "$1" | tr ',' ' ') || error "mouse_move(): wlrctl failed to move the mouse"
+    wlrctl pointer move $(echo "$coordinates" | tr ',' ' ') || error "mouse_move(): wlrctl failed to move the mouse to '$coordinates'"
   fi
 }
 
