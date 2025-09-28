@@ -61,8 +61,22 @@ screenshot_fullscreen() { #take a screenshot of the full screen, save it to $1 p
   
   if [ "$XDG_SESSION_TYPE" == x11 ];then
     scrot -zoF "$1" || error "screenshot_fullscreen(): failed, please review errors above"
+  elif [ "$XDG_SESSION_TYPE" == wayland ] && [ ! -z "$WESTON_CONFIG_FILE" ];then
+    #grim doesn't work on weston, and this tool is stupid and does not honor a filename.
+    # First make a folder to save the screenshot into
+    mkdir -p "$1.folder" || error "screenshot_fullscreen(): failed to make tmpdir for weston-screenshooter"
+    cd "$1.folder"
+    weston-screenshooter || error "screenshot_fullscreen(): failed, please review errors above"
+    mv "$1.folder"/* "$1"
+    rmdir "$1.folder" || error "screenshot_fullscreen(): failed to remove tmpdir for weston-screenshooter"
   elif [ "$XDG_SESSION_TYPE" == wayland ];then
     grim "$1" || error "screenshot_fullscreen(): failed, please review errors above"
+  else
+    error "screenshot_fullscreen(): XDG_SESSION_TYPE needs to be set to either 'x11' or 'wayland'"
+  fi
+  
+  if [ ! -f "$1" ];then
+    error "screenshot_fullscreen(): screenshot tool somehow succeeded, but the screenshot was not saved to '$1'!"
   fi
 }
 
@@ -343,7 +357,7 @@ keyboard_shortcut() { #press multiple keys at once, and special keys. one argume
 subscreen_start() { #start a nested x or wayland display (type must be specified in $1: x11, x11-headless, wayland, wayland-headless)
   local display_type="$1"
   local display_dimensions="$2"
-  
+  local line #don't export last line processed by the while loops
   #parse display dimensions, if given
   local display_width
   local display_height
@@ -411,7 +425,7 @@ subscreen_start() { #start a nested x or wayland display (type must be specified
       elif [ "$XDG_SESSION_TYPE" == wayland ];then
         weston_backend=(--backend="wayland-backend.so")
       else
-        error "subscreen(): Seems like your system is headless. (no wayland or x11 desktop session found)\nTo run this function headless, use the 'wayland-headless' mode."
+        error "subscreen_start(): Seems like your system is headless. (no wayland or x11 desktop session found)\nTo run this function headless, use the 'wayland-headless' mode."
       fi
       
       #run weston, which runs env, so capture the new values of DISPLAY and WAYLAND_DISPLAY and export them 
@@ -424,11 +438,16 @@ subscreen_start() { #start a nested x or wayland display (type must be specified
           export "$line" #export subscreen_pid for subscreen_stop
           
         elif [[ "$line" == WESTON_CONFIG_FILE=* ]];then
+          #if weston got far enough to run env, it did not fail
+          export "$line"
           break #we have reached the end of useful env output, DISPLAY and WAYLAND_DISPLAY have already been set, so exit and leave weston running as a background process
         fi
         #to run weston on RPi with GPU acceleration, add MESA_LOADER_DRIVER_OVERRIDE=v3d and remove --use-pixman
-        #weston version (on bookworm at least) does not support running a program directly on the command-line, or --renderer=pixman
-      done < <(weston "${westonbackend[@]}" --width="$display_width" --height="$display_height" --use-pixman --xwayland -c "${AUTOMATON_DIR}/weston.ini" & subscreen_pid=$! ; echo "subscreen_pid=$subscreen_pid" ; wait $subscreen_pid)
+        #weston version (on bookworm at least) does not support running a program directly on the command-line, or --renderer=pixman. --debug is there to allow taking screenshots
+      done < <(weston "${westonbackend[@]}" --width="$display_width" --height="$display_height" --use-pixman --debug --xwayland -c "${AUTOMATON_DIR}/weston.ini" & subscreen_pid=$! ; echo "subscreen_pid=$subscreen_pid" ; wait $subscreen_pid)
+      if [ -z "$WESTON_CONFIG_FILE" ];then
+        error "subscreen_start(): Weston failed to start! Please review errors above."
+      fi
       ;;
     *)
       error "subscreen(): not sure if you need a X11 or Wayland display, headless or not.\nPlease use 1 of the following 4 arguments: x11, x11-headless, wayland, wayland-headless"
@@ -468,6 +487,11 @@ subscreen_pid=''
 original_DISPLAY="$DISPLAY"
 original_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"
 original_XDG_SESSION_TYPE="$XDG_SESSION_TYPE"
+if [ -z "$WESTON_CONFIG_FILE" ];then
+  #to ensure the right screenshot tool is run, make this a global variable to be set by subscreen_start
+  # but keep original value if toplevel wayland session happens to be weston
+  WESTON_CONFIG_FILE=''
+fi
 
 #install dependencies
 install_list=()
