@@ -62,7 +62,7 @@ screenshot_fullscreen() { #take a screenshot of the full screen, save it to $1 p
   if [ "$XDG_SESSION_TYPE" == x11 ];then
     scrot -zoF "$1" || error "screenshot_fullscreen(): failed, please review errors above"
   elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    (sleep 2; warning "screenshot_fullscreen(): this is taking longer than expected. Most likely your wayland subscreen is not visible to your real screen, making it skip rendering. Please make the window visible, or switch to a headless subscreen.") &
+    (sleep 2; warning "screenshot_fullscreen(): this is taking longer than expected. Most likely your wayland subscreen is not visible to your real screen, making it pause rendering. Please make the window visible, or switch to a headless subscreen.") &
     local warning_pid=$!
     grim "$1" || error "screenshot_fullscreen(): failed, please review errors above"
     kill $warning_pid 2>/dev/null || status_green "screenshot_fullscreen(): Screenshot succeeded. Proceeding..."

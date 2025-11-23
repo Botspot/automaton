@@ -551,15 +551,14 @@ $(grep -F '() {' "$AUTOMATON_DIR/api")
 Important notes:
 - AUTOMATON_DIR=$AUTOMATON_DIR - path to the automaton git repo, which contains api, gui, and other automaton helper scripts.
 - PATTERNS_DIR=$PATTERNS_DIR - path to folder that stores PNG files (patterns) used by the locate_pattern function.
-- Automaton's strength is its pattern recognition. Use it to move the mouse. Don't use hardcoded coordinate values.
 - All Automaton functions work the same in x11 and wayland.
 - All automaton functions expect a relative filename for patterns in PATTERNS_DIR. Don't use full path, don't add logic to check if a pattern png file exists.
 - Don't sleep X seconds to wait for an app or website to open. Simply use locate_pattern_retry to wait for something in that app/website to appear on screen.
-- To open a website, use chromium <website-url> &
-Bad:
-mouse_move 800,400
-Good:
-mouse_move $(locate_pattern_retry button-3.png center)
+- To open a website, use \`$(basename "$(readlink -f /usr/bin/x-www-browser)" | sed 's/^$/chromium/g') <website-url> &\`
+- To read text on the screen, don't use OCR or tesseract due to potential unreliability. Instead, select the text, copy it, and read the clipboard. Example: \`mouse_move <...>; mouse_click; mouse_click; keyboard_shortcut Ctrl c; text_contents="\"\$"(clipboard_dump)"\""\`
+- Automaton's strength is its pattern recognition. Use pattern coordinates to position the mouse. Don't use hardcoded placeholder coordinate values.
+    Bad: \`mouse_move 800,400\`
+    Good: \`mouse_move "\$"(locate_pattern_retry button-3.png center)\`
 Below is the current contents of \`${USERSCRIPT}\`:
 \`\`\`bash
 $(cat "${USERSCRIPT}")
