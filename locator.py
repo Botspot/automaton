@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-#Written by Botpot with a lot of help from Grok 3
+#Written by Botspot with a lot of help from Grok 3
 
 #locator.py waits for PNG image pairs to process on the $1 named pipe.
 #Image pairs are separated by a tab character.

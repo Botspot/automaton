@@ -351,9 +351,9 @@ keyboard_shortcut() { #press multiple keys at once, and special keys. one argume
     if [ -z "$wlrctl_letters" ]; then
       error "On Wayland, wlrctl requires a key combination to use at least 1 key that is NOT one of the following keys: Ctrl, Shift, Alt, Super."
     elif [ -n "$wlrctl_modifiers" ]; then
-      wlrctl type "$wlrctl_letters" modifiers "${wlrctl_modifiers#,}"
+      wlrctl keyboard type "$wlrctl_letters" modifiers "${wlrctl_modifiers#,}"
     else
-      wlrctl type "$wlrctl_letters"
+      wlrctl keyboard type "$wlrctl_letters"
     fi
   fi
 }
