@@ -623,7 +623,7 @@ Start your initial response with "\""<name of ai model> here. I am good at bash 
           scroll_direction="$(echo "$output" | sed -n 1p)"
           repetition="$(echo "$output" | sed -n 2p)"
           
-          clipboard_set "mouse_scroll_$scroll_direction $repetition"
+          clipboard_set "mouse_scroll $scroll_direction $repetition"
           ;;
         move-mouse)
           output="$(yad "${yad_common[@]}" \
