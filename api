@@ -225,7 +225,7 @@ mouse_right_click() { #mouse do a right-click
   if [ "$XDG_SESSION_TYPE" == x11 ];then
     xdotool click 3
   elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    wlrctl pointer click left
+    wlrctl pointer click right
   fi
 }
 
