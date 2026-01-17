@@ -440,7 +440,7 @@ subscreen_start() { #start a nested x or wayland display (type must be specified
       
       #create temporary sway config with resolution and startup echoes
       if [ -z "$sway_config" ];then
-        error "start_subscreen(): sway_config should have been set when sourcing api"
+        error 'start_subscreen(): $sway_config should have been set when sourcing api'
       fi
       echo "output $output_name mode ${display_width}x${display_height}"'\
 
@@ -459,13 +459,13 @@ exec echo "sway_ready"' >> "$sway_config"
         elif [[ "$line" == subscreen_pid=* ]];then
           export "$line" #export subscreen_pid for subscreen_stop
           
-        elif [[ "$line" == sway_ready ]];then
+        elif [ "$line" == sway_ready ];then
           #if sway got far enough to run the execs, it did not fail
           sway_succeeded=1
           break #we have reached the end of useful output, DISPLAY and WAYLAND_DISPLAY have already been set, so exit and leave sway running as a background process
         fi
         #use sway because it is the only wayland compositor that works in nested mode on pi os (rules out wayfire), while being available on ubuntu repos (rules out labwc), while being based on wlroots (rules out mutter)
-      done < <(WLR_BACKEND="$wlr_backend" WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 WLR_RENDERER_FORCE_SOFTWARE=1 sway -c "$sway_config" & subscreen_pid=$! ; echo "subscreen_pid=$subscreen_pid" ; wait $subscreen_pid)
+      done < <(WLR_BACKENDS="$wlr_backend" WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 WLR_RENDERER_FORCE_SOFTWARE=1 sway -c "$sway_config" & subscreen_pid=$! ; echo "subscreen_pid=$subscreen_pid" ; wait $subscreen_pid)
       rm "$sway_config"
       if [ "$sway_succeeded" == 0 ];then
         error "subscreen_start(): Sway failed to start! Please review errors above."
