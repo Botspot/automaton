@@ -652,11 +652,11 @@ Start your initial response with "\""<name of ai model> here. I am good at bash 
             --field='Special key 3:CB' "!Ctrl!Shift!Alt!Super!Enter!Tab!Escape!Backspace!Space" \
             --field='Normal keys:' "")"
           [ $? != 0 ] && return
-          keycombo="$(echo "$output" | head -n3 | tr '\n' ' ' | sed 's/  / /g ; s/ $//g')"
+          keycombo="$(echo "$output" | head -n3 | tr '\n' ' ' | sed 's/  */ /g ; s/ $//g')"
           normalkeys="$(echo "$output" | sed -n 4p)"
           if [ ! -z "$normalkeys" ];then
-            #quote normal keys in single-quotes, and escape any single quotes
-            keycombo+=" '$(echo "$normalkeys" | sed "s/'/'\\\''/g")'"
+            #quote normal keys in single-quotes, escape any single quotes, and ensure everything is lowercase to avoid unintentional presses of the shift key
+            keycombo+=" '$(echo "$normalkeys" | sed "s/'/'\\\''/g"| tr [A-Z] [a-z])'"
           fi
           
           clipboard_set "keyboard_shortcut $keycombo"
@@ -669,7 +669,7 @@ Start your initial response with "\""<name of ai model> here. I am good at bash 
           clipboard_set "clipboard_set '$(echo "$clipboard" | sed "s/'/'\\\''/g")'"
           ;;
         dump-clipboard)
-          clipboard="$(yad "${yad_common[@]}")"
+          clipboard="$(yad "${yad_common[@]}" --text="This code snippet has no options.")"
           [ $? != 0 ] && return
           clipboard_set "clipboard_dump"
           ;;
