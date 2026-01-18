@@ -3,13 +3,14 @@
 #export all functions and variables so they are reachable by bash subprocesses, such as in timeout and yad
 set -a
 
-
 #DO NOT use set -e. It breaks any function that needs to run a command (like yad) and check its error code with $?
 
 #Make trap payload that exits out of parent function that ran error
-set -o errtrace # Ensure ERR trap is inherited in functions
-# Set ERR trap to exit from only the parent function that ran error
-trap 'if [ "$exiting_parent_function_from_error" == 1 ] && [ ${#FUNCNAME[@]} -gt 1 ] && [ "${FUNCNAME[1]}" != "source" ]; then echo "hello from trap, exiting ${FUNCNAME[0]}()" >/dev/null; exiting_parent_function_from_error=0; return 1; fi' ERR
+set -o functrace #Ensure DEBUG trap is inherited in functions
+
+# Set DEBUG trap to exit from only the parent function that ran error, not any outer function layers
+exiting_parent_function_from_error=0 #make variable global so changes made from within the error function persist
+trap 'if [ "$exiting_parent_function_from_error" == 1 ] && [ ${#FUNCNAME[@]} -gt 1 ] && [ "${FUNCNAME[1]}" != "source" ] && [ "${FUNCNAME[0]}" != "error" ]; then echo "hello from trap, exiting ${FUNCNAME[0]}()" >/dev/null; exiting_parent_function_from_error=0; return 1; fi' DEBUG
 
 #correct behavior of error: break out of only its parent function, not all layers, not the script, just make the function that ran it return 1.
 #or if error is run in the script, exit the script.
@@ -18,7 +19,7 @@ error() { #echo an error message in red text, and make the parent process (scrip
   
   #if error is being run within another function, and we're not inside of api being sourced, and the trap payload that makes the parent function exit, then return 1
   #situation where the trap payload is unavailable: separate shells run by yad. Better to exit 1 than have error do nothing. (and sourcing api again would be overkill)
-  if [ ${#FUNCNAME[@]} -gt 1 ] && [ "${FUNCNAME[1]}" != "source" ] && [[ "$(trap -p ERR)" == *exiting_parent_function_from_error* ]];then
+  if [ ${#FUNCNAME[@]} -gt 1 ] && [ "${FUNCNAME[1]}" != "source" ] && [[ "$(trap -p DEBUG)" == *exiting_parent_function_from_error* ]];then
     #set this variable that enables the trap trigger to do anything
     exiting_parent_function_from_error=1
     return 1
