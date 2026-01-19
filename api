@@ -451,7 +451,7 @@ subscreen_start() { #start a nested x or wayland display (type must be specified
         #registers virtual input devices via the Wayland protocol that persist as long as the server is running
         headless_wayvnc="exec wayvnc --unix-socket $RAM_LOCATION/wayvnc-"\$"WAYLAND_DISPLAY.sock -L debug -k ${XKB_DEFAULT_LAYOUT:-us}"
       fi
-      echo "output $output_name mode ${display_width}x${display_height}@1Hz
+      echo "output $output_name mode ${display_width}x${display_height}
 default_border none
 exec echo "'"WAYLAND_DISPLAY=$WAYLAND_DISPLAY\nDISPLAY=$DISPLAY\nsway_ready"'"
 $headless_wayvnc" > "$sway_config"
