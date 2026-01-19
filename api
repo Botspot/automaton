@@ -447,13 +447,11 @@ subscreen_start() { #start a nested x or wayland display (type must be specified
       
       #workaround headless sway not creating a movable mouse pointer: make a VNC server and connect to it with python to keep the mouse active
       local headless_wayvnc
-      local headless_wayvnc_socket="$RAM_LOCATION/wayvnc-$WAYLAND_DISPLAY.sock"
       if [ "$wlr_backend" == headless ];then
         #registers virtual input devices via the Wayland protocol that persist as long as the server is running
-        headless_wayvnc="exec wayvnc --unix-socket $headless_wayvnc_socket -L debug"
+        headless_wayvnc="exec wayvnc --unix-socket $RAM_LOCATION/wayvnc-"\$"WAYLAND_DISPLAY.sock -L debug -k ${XKB_DEFAULT_LAYOUT:-us}"
       fi
       echo "output $output_name mode ${display_width}x${display_height}@1Hz
-
 default_border none
 exec echo "'"WAYLAND_DISPLAY=$WAYLAND_DISPLAY\nDISPLAY=$DISPLAY\nsway_ready"'"
 $headless_wayvnc" > "$sway_config"
@@ -481,6 +479,9 @@ $headless_wayvnc" > "$sway_config"
       if [ "$sway_succeeded" == 0 ] || [ "$original_WAYLAND_DISPLAY" == "$WAYLAND_DISPLAY" ];then
         error "subscreen_start(): Sway failed to start! Please review errors above."
       fi
+      
+      #set this after sway runs, to get the new WAYLAND_DISPLAY
+      local headless_wayvnc_socket="$RAM_LOCATION/wayvnc-$WAYLAND_DISPLAY.sock"
       
       #workaround headless sway not creating a movable mouse pointer: make a VNC server and connect to it with python to keep the mouse active
       local vncdummy_succeeded=0
