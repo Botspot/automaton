@@ -292,7 +292,7 @@ gui_test_pattern_live() { #indicate in real-time if pattern $1 is seen on screen
     offset='+0+0'
   fi
   
-  locator_start
+  daemon_start
   
   local IFS=' '
   local history=''
@@ -520,8 +520,8 @@ PATTERNS_DIR=$(echo '"'"$PATTERNS_DIR"'"' | sed "s+"\""$HOME+"\"\$"HOME+g")
 AUTOMATON_DIR=$(echo '"'"$AUTOMATON_DIR"'"' | sed "s+"\""$HOME+"\"\$"HOME+g")
 source "\"\$"AUTOMATON_DIR/api"\""
 
-#this starts the pattern locator service. Comment this out if you don't use locate_pattern.
-locator_start
+#this starts the pattern locator service, and vnc server to allow keyboars/mouse usage.
+daemon_start
 
 #Your code begins below this line. Happy automating! -Botspot" > "$USERSCRIPT"
       #make the script executable
@@ -785,9 +785,10 @@ done"
           esac
           dimensions="$(yad "${yad_common[@]}" \
             --text="$default_text" \
-            --field='Subscreen dimensions::CBE' '1920x1080!1366x768')"
+            --field='Subscreen dimensions::CBE' '1920x1080!1366x768' \
+            --field='IMPORTANT: make subscreen_start run before daemon_start!:LBL' '')"
           [ $? != 0 ] && return
-          clipboard_set "subscreen_start $(echo "$mode" | sed 's/-subscreen$//g') $dimensions"
+          clipboard_set "subscreen_start $(echo "$mode" | sed 's/-subscreen$//g') $(echo "$dimensions" | head -n1)"
           ;;
         subscreen-stop)
           yad "${yad_common[@]}" \

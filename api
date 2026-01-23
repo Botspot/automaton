@@ -10,7 +10,7 @@ set -o functrace #Ensure DEBUG trap is inherited in functions
 
 # Set DEBUG trap to exit from only the parent function that ran error, not any outer function layers
 exiting_parent_function_from_error=0 #make variable global so changes made from within the error function persist
-trap 'if [ "$exiting_parent_function_from_error" == 1 ] && [ ${#FUNCNAME[@]} -gt 1 ] && [ "${FUNCNAME[1]}" != "source" ] && [ "${FUNCNAME[0]}" != "error" ]; then echo "hello from trap, exiting ${FUNCNAME[0]}()" >/dev/null; exiting_parent_function_from_error=0; return 1; fi' DEBUG
+trap 'if [ "$exiting_parent_function_from_error" == 1 ] && [ ${#FUNCNAME[@]} -gt 1 ] && [ "${FUNCNAME[1]}" != "source" ] && [ "${FUNCNAME[0]}" != "error" ]; then echo "hello from error trap, exiting ${FUNCNAME[0]}()" >/dev/null; exiting_parent_function_from_error=0; return 1; fi' DEBUG
 
 #correct behavior of error: break out of only its parent function, not all layers, not the script, just make the function that ran it return 1.
 #or if error is run in the script, exit the script.
@@ -46,13 +46,27 @@ status_green() { #announce the success of a major action
   echo -e "\e[92m$1\e[0m" 1>&2
 }
 
-wait_for_file_creation() { #wait for the $1 file to be created, without using a loop
-  if [ -z "$1" ];then
+wait_for_file_creation() {
+  local file="$1"
+  if [ -z "$file" ]; then
     error "wait_for_file_creation() requires a file argument"
-  elif [ -e "$1" ];then
+  elif [ -e "$file" ];then
     return 0 #file already exists, exit immediately
   fi
-  inotifywait -e create "$(dirname "$1")" --include "$(basename "$1")" -q >/dev/null
+  
+  #check for file existence again after inotifywait says "watches established"
+  #prevents race condition with files being created before watches are set up
+  local line
+  while read line; do
+    if [ -e "$file" ]; then
+      return 0
+    fi
+  done < <(inotifywait -e create,moved_to "$(dirname "$file")" --include "$(basename "$file")" 2>&1)
+}
+
+run_on_exit() { #accumulative trap command for EXIT: put commands in $1 just like with trap
+  exit_commands+=$'\n'"$1"
+  trap "$exit_commands" EXIT
 }
 
 screenshot_fullscreen() { #take a screenshot of the full screen, save it to $1 png file
@@ -101,23 +115,51 @@ crop_image() { #given a $1 png image, crop it to $2 rectangle coordinates (X,Y +
   fi
 }
 
-locator_start() { #start python opencv process that waits for targets on screen to find. Takes no arguments.
+locator_start() { #this function has been renamed to daemon_start
+  warning "locator_start(): this function has been renamed to daemon_start."
+  daemon_start
+}
+
+locator_stop() { #this function has been renamed to daemon_stop
+  warning "locator_stop(): this function has been renamed to daemon_stop."
+  daemon_stop
+}
+
+daemon_start() { #start automaton utilities on the current screen or subscreen. Starts a vnc server and vnc_injector.py for mouse/keyboard usage, and starts locator.py for opencv to wait for targets on screen to find. Takes no arguments.
   if [ -z "$locator_pipe" ];then
-    error 'locator_start(): $locator_pipe is not set! This should have been set when sourcing the automaton api.'
+    error 'daemon_start(): $locator_pipe is not set! This should have been set when sourcing the automaton api.'
   fi
   
-  rm -f "$locator_pipe" "${locator_pipe}.out" || error "locator_start(): Failed to first remove '$locator_pipe' file!"
+  daemon_stop || error "daemon_start(): Failed to first daemon_stop!!"
   
-  #run it as a background process (it will stop when the named pipe is deleted)
+  #run locator.py as a background process (it will stop when the named pipe is deleted)
   "$AUTOMATON_DIR/locator.py" "$locator_pipe" &
   
   #wait for the python script to create the named pipe using inotifywait
   timeout 10 bash -c "wait_for_file_creation '$locator_pipe.out'" || error "locator.py failed to initialize within 10 seconds. Please refer to errors above."
+  
+  #now start a vnc server and vnc_injector for mouse and keyboard movements that work the same on x11/wayland
+  
+  if [ "$XDG_SESSION_TYPE" == x11 ];then
+    x11vnc -q -display $DISPLAY -unixsock "$vnc_socket" -rfbport 0 -nopw &
+  elif [ "$XDG_SESSION_TYPE" == wayland ];then
+    wayvnc --render-cursor --unix-socket --socket="$vnc_control_socket" "$vnc_socket" &
+  fi
+  vnc_pid=$!
+  
+  #wait for the vnc server to be up and ready
+  timeout 10 bash -c "wait_for_file_creation '$vnc_socket'" || error "daemon_start(): vnc server failed to launch on $XDG_SESSION_TYPE, please review errors above."
+  
+  #run vnc_injector.py as a background process (it will stop when the named pipe is deleted)
+  "$AUTOMATON_DIR/vnc_injector.py" "$vnc_socket" "$vnc_pipe" &
+  
+  #wait for vnc_injector.py to be up and ready
+  timeout 10 bash -c "wait_for_file_creation '$vnc_pipe'" || error "daemon_start(): vnc_injector.py failed to launch on $XDG_SESSION_TYPE, please review errors above."
 }
 
-locator_stop() { #stops python opencv process that waits for targets on screen to find. Takes no arguments.
-  rm -f "$locator_pipe" || error "locator_stop(): Failed to remove '$locator_pipe'!"
-  rm -f "${locator_pipe}.out" || error "locator_stop(): Failed to remove '${locator_pipe}.out'!"
+daemon_stop() { #stops automaton utilities on the current screen or subscreen. Takes no arguments.
+  rm -f "$locator_pipe" "$locator_pipe.out" "$vnc_socket" "$vnc_control_socket" "$vnc_pipe" || error "daemon_stop(): failed to remove some files from last time. Please review the above errors, and remove them manually."
+  kill $vnc_pid &>/dev/null || true
 }
 
 locate_pattern() { #locate where on the screen the $1 pattern is, using opencv. $2 is optional offset argument in the form of +x+y, or a special offset 'center' which finds the midpoint of the pattern. Outputs X,Y. Exits with a stderr error message and exitcode 1, and no stdout output, if pattern not found. (set locate_pattern_stop_complaining=1 to hide the error)
@@ -126,14 +168,15 @@ locate_pattern() { #locate where on the screen the $1 pattern is, using opencv. 
   if [ ! -f "$pattern" ];then
     error "locate_pattern(): pattern png file at '$pattern' not found!"
   elif [ ! -p "$locator_pipe" ];then
-    error "locate_pattern(): locator_start must be run first! ($locator_pipe does not exist)"
+    error "locate_pattern(): daemon_start must be run first! ($locator_pipe does not exist)"
   fi
   
   #wayland screenshots on Pi OS at least keep the mouse in view for some reason, so move the mouse to the bottom right corner if running in a subscreen
-  if [ "$XDG_SESSION_TYPE" == wayland ] && [ "$original_DISPLAY" != "$DISPLAY" ];then
+  #if [ "$XDG_SESSION_TYPE" == wayland ] && [ "$original_DISPLAY" != "$DISPLAY" ];then
     #moving the mouse in the main screen would compromise UX too much
-    wlrctl pointer move 1000000 1000000
-  fi
+    #wlrctl pointer move 1000000 1000000
+  #fi
+  #UPDATE: this seems to have been fixed on the pi os side... if uncommenting, don't use wlrctl
   
   #pixel offset provided ahead of time. Format: +X+Y
   if [[ "$2" == '+'* ]];then
@@ -160,7 +203,7 @@ locate_pattern() { #locate where on the screen the $1 pattern is, using opencv. 
   
   local location
   local IFS=' '
-  if read location similarity <"${locator_pipe}.out" 2>/dev/null ;then #read blocks until something is in the output pipe
+  if read location similarity <"$locator_pipe.out" 2>/dev/null ;then #read blocks until something is in the output pipe
     #read returns code 0 if [ ! -z "$location" ]
     rm -f "$screenshot"
     if [ ! -z "$offset" ];then
@@ -202,40 +245,37 @@ mouse_move() { #move mouse to absolute position $1 (format X,Y). Rather than spe
   local coordinates="$(echo "$1" | awk '{print $1}')"
   if [ -z "$coordinates" ];then
     error "mouse_move(): no input coordinates"
+  elif [[ "$coordinates" != *','* ]];then
+    error "mouse_move(): input coordinates need to be specified in X,Y format, got '$coordinates'"
+  elif [ ! -p "$vnc_pipe" ];then
+    error "mouse_move(): $vnc_pipe does not exist. Please run the daemon_start function first."
   fi
-  if [ "$XDG_SESSION_TYPE" == x11 ];then
-    #xdotool allows absolute mouse movements
-    xdotool mousemove --sync $(echo "$coordinates" | tr ',' ' ') || error "mouse_move(): xdotool failed to move the mouse to '$coordinates'"
-  elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    #wlrctl only allows relative movements, so move to top left corner first
-    wlrctl pointer move -1000000 -1000000
-    #and then move to desired location, replacing ',' with space
-    wlrctl pointer move $(echo "$coordinates" | tr ',' ' ') || error "mouse_move(): wlrctl failed to move the mouse to '$coordinates'"
-  fi
+  
+  echo "mousemove $(echo "$coordinates" | tr ',' ' ')" > "$vnc_pipe"
 }
 
 mouse_click() { #normal mouse click
-  if [ "$XDG_SESSION_TYPE" == x11 ];then
-    xdotool click 1
-  elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    wlrctl pointer click left
+  if [ ! -p "$vnc_pipe" ];then
+    error "mouse_click(): $vnc_pipe does not exist. Please run the daemon_start function first."
   fi
+  
+  echo "mouseclick 1" > "$vnc_pipe"
 }
 
 mouse_right_click() { #mouse do a right-click
-  if [ "$XDG_SESSION_TYPE" == x11 ];then
-    xdotool click 3
-  elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    wlrctl pointer click right
+  if [ ! -p "$vnc_pipe" ];then
+    error "mouse_right_click(): $vnc_pipe does not exist. Please run the daemon_start function first."
   fi
+  
+  echo "mouseclick 3" > "$vnc_pipe"
 }
 
 mouse_middle_click() { #mouse press the scroll wheel
-  if [ "$XDG_SESSION_TYPE" == x11 ];then
-    xdotool click 2
-  elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    wlrctl pointer click middle
+  if [ ! -p "$vnc_pipe" ];then
+    error "mouse_middle_click(): $vnc_pipe does not exist. Please run the daemon_start function first."
   fi
+  
+  echo "mouseclick 2" > "$vnc_pipe"
 }
 
 mouse_scroll() { #scroll $1=[up/down] $2 times (scroll once if $2 not specified)
@@ -245,24 +285,20 @@ mouse_scroll() { #scroll $1=[up/down] $2 times (scroll once if $2 not specified)
     scrolltimes=1 #default value 1 if not set
   fi
   
+  if [ ! -p "$vnc_pipe" ];then
+    error "mouse_scroll(): $vnc_pipe does not exist. Please run the daemon_start function first."
+  fi
+  
   if [ "$scrolldirection" == down ];then
     #scroll down
-    if [ "$XDG_SESSION_TYPE" == x11 ];then
-      for ((n=0;n<$scrolltimes;n++)); do
-        xdotool click 5
-      done
-    elif [ "$XDG_SESSION_TYPE" == wayland ];then
-      wlrctl pointer scroll $((15*scrolltimes))
-    fi
+    for ((n=0;n<$scrolltimes;n++)); do
+      echo "mouseclick 5" > "$vnc_pipe"
+    done
   elif [ "$scrolldirection" == up ];then
     #scroll up
-    if [ "$XDG_SESSION_TYPE" == x11 ];then
-      for ((n=0;n<$scrolltimes;n++)); do
-        xdotool click 4
-      done
-    elif [ "$XDG_SESSION_TYPE" == wayland ];then
-      wlrctl pointer scroll $((-15*scrolltimes))
-    fi
+    for ((n=0;n<$scrolltimes;n++)); do
+      echo "mouseclick 4" > "$vnc_pipe"
+    done
   else
     error "mouse_scroll(): first argument must be 'up' or 'down'. Got '$1'"
   fi
@@ -285,85 +321,34 @@ clipboard_dump() { #output the contents of the primary clipboard to stdout
   fi
 }
 
-keyboard_type() { #type text in $1 with the keyboard
+clipboard_selection_dump() { #output the contents of selected text to stdout
   if [ "$XDG_SESSION_TYPE" == x11 ];then
-    echo -n "$1" | xdotool type --file -
+    xclip -o -selection primary
   elif [ "$XDG_SESSION_TYPE" == wayland ];then
-    wlrctl keyboard type "$1"
+    wl-paste -p
   fi
 }
 
-keyboard_shortcut() { #press multiple keys at once, and special keys. one argument per key. Example: keyboard_shortcut Ctrl Alt a (VERY IMPORTANT: keyboard_shortcut accepts ONLY: Ctrl, Shift, Alt, Super, Enter, Tab, Escape, Backspace, Space, and ASCII characters. Anything not in that list, including F1,F2,F3,F4,F5,F6,F7,F8,F9,F10,F11,F12, will be treated as individual literal letters. For example 'keyboard_shortcut Alt F4' will not press Alt+F4, it will press and hold Alt while typing the letter F and the number 4. To close a window, use Ctrl w, Ctrl q, Escape, or click a close button.)
-  local wlrctl_modifiers=""
-  local wlrctl_letters=""
-  local x_key_combo=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      Ctrl)
-        wlrctl_modifiers+=",CTRL"
-        x_key_combo+="+ctrl"
-        ;;
-      Shift)
-        wlrctl_modifiers+=",SHIFT"
-        x_key_combo+="+shift"
-        ;;
-      Alt)
-        wlrctl_modifiers+=",ALT"
-        x_key_combo+="+alt"
-        ;;
-      Super)
-        wlrctl_modifiers+=",SUPER"
-        x_key_combo+="+super"
-        ;;
-      Tab)
-        wlrctl_letters+=$'\t'
-        x_key_combo+="+Tab"
-        ;;
-      Escape)
-        wlrctl_letters+=$'\e'
-        x_key_combo+="+Escape"
-        ;;
-      Backspace)
-        wlrctl_letters+=$'\b'
-        x_key_combo+="+BackSpace"
-        ;;
-      Enter)
-        wlrctl_letters+=$'\n'
-        x_key_combo+="+Return"
-        ;;
-      Space)
-        wlrctl_letters+=' '
-        x_key_combo+="+space"
-        ;;
-      *)
-        wlrctl_letters+="$1"
-        x_key_combo+="+${1}"
-        ;;
-    esac
-    shift
-  done
-  if [ "$XDG_SESSION_TYPE" = x11 ]; then
-    if [ -z "$x_key_combo" ]; then
-      error "On X11, xdotool requires a key combination to use at least 1 key."
-    else
-      xdotool key "${x_key_combo#+}"
-    fi
-  elif [ "$XDG_SESSION_TYPE" = wayland ]; then
-    if [ -z "$wlrctl_letters" ]; then
-      error "On Wayland, wlrctl requires a key combination to use at least 1 key that is NOT one of the following keys: Ctrl, Shift, Alt, Super."
-    elif [ -n "$wlrctl_modifiers" ]; then
-      wlrctl keyboard type "$wlrctl_letters" modifiers "${wlrctl_modifiers#,}"
-    else
-      wlrctl keyboard type "$wlrctl_letters"
-    fi
+keyboard_type() { #type text in $1 with the keyboard
+  if [ ! -p "$vnc_pipe" ];then
+    error "keyboard_type(): $vnc_pipe does not exist. Please run the daemon_start function first."
   fi
+  echo "keyboardtype $1" > "$vnc_pipe"
+}
+
+keyboard_shortcut() { #press multiple keys at once, and special keys. one argument per key. Example: keyboard_shortcut Ctrl Alt a    Allowed special keys (case-insensitive): enter return backspace tab esc escape delete del home end pgup pageup pgdn pagedown left up right down f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 shift rshift ctrl rctrl control alt ralt meta super win cmd space
+  local IFS=' ' #fixes $* from using \n separator
+  if [ ! -p "$vnc_pipe" ];then
+    error "keyboard_shortcut(): $vnc_pipe does not exist. Please run the daemon_start function first."
+  fi
+  echo "keyboardshortcut $*" > "$vnc_pipe"
 }
 
 subscreen_start() { #start a nested x or wayland display (type must be specified in $1: x11, x11-headless, wayland, wayland-headless)
   local display_type="$1"
   local display_dimensions="$2"
   local line
-  local subscreen_pid
+  #local subscreen_pid #don't make this local!!
   #parse display dimensions, if given
   local display_width
   local display_height
@@ -388,18 +373,18 @@ subscreen_start() { #start a nested x or wayland display (type must be specified
       case "$display_type" in
         x11)
         #xephyr
-        Xephyr -no-host-grab -title "Automaton nested x11 display on :$x_display" -ac -screen ${display_width}x${display_height} -br -glamor -dpi 96 ":$x_display" &
-        export subscreen_pid=$!
+        Xephyr -no-host-grab -title "Automaton nested x11 display on :$x_display" -ac -screen ${display_width}x${display_height} -br -sw-cursor -glamor -dpi 96 ":$x_display" &
+        subscreen_pid=$!
         ;;
       x11-headless)
         #xvfb
-        Xvfb -ac -screen ${display_width}x${display_height} -br -glamor -dpi 96 ":$x_display" 2>/dev/null
-        export subscreen_pid=$!
+        Xvfb -ac -screen 0 ${display_width}x${display_height}x24 -br -dpi 96 ":$x_display" &
+        subscreen_pid=$!
         ;;
       esac
       #before this function exits, the display needs to be ready for connections.
       #Wait for lockfile creation
-      wait_for_file_creation /tmp/.X11-unix/X$x_display
+      timeout 10 bash -c "wait_for_file_creation '/tmp/.X11-unix/X$x_display'" || error "subscreen_start(): $display_type failed to start in 10 seconds (/tmp/.X11-unix/X$x_display was not created)"
       
       #all apps downstream now use this DISPLAY and XDG_SESSION_TYPE, and ensure WAYLAND_DISPLAY is unset
       export XDG_SESSION_TYPE=x11
@@ -445,17 +430,13 @@ subscreen_start() { #start a nested x or wayland display (type must be specified
         error 'start_subscreen(): $sway_config should have been set when sourcing api'
       fi
       
-      #workaround headless sway not creating a movable mouse pointer: make a VNC server and connect to it with python to keep the mouse active
-      local headless_wayvnc
-      if [ "$wlr_backend" == headless ];then
-        #registers virtual input devices via the Wayland protocol that persist as long as the server is running
-        headless_wayvnc="exec wayvnc --unix-socket $RAM_LOCATION/wayvnc-"\$"WAYLAND_DISPLAY.sock -L debug -k ${XKB_DEFAULT_LAYOUT:-us}"
-      fi
       echo "output $output_name mode ${display_width}x${display_height}
+# Force a default US keymap for all keyboards (virtual or physical)
+input * xkb_layout ${XKB_DEFAULT_LAYOUT:-us}
+xwayland enable
 default_border none
 exec echo "'"WAYLAND_DISPLAY=$WAYLAND_DISPLAY\nDISPLAY=$DISPLAY\nsway_ready"'"
-$headless_wayvnc" > "$sway_config"
-      cat "$sway_config"
+exec echo sway_ready" > "$sway_config"
       #if there's a base config, you could include it: echo "include ${AUTOMATON_DIR}/sway.ini" at top
       
       #run sway, capture output to get the env variables
@@ -473,83 +454,11 @@ $headless_wayvnc" > "$sway_config"
           break #we have reached the end of useful output, DISPLAY and WAYLAND_DISPLAY have already been set, so exit and leave sway running as a background process
         fi
         #use sway because it is the only wayland compositor that works in nested mode on pi os (rules out wayfire), while being available on ubuntu repos (rules out labwc), while being based on wlroots (rules out mutter)
-      done < <(WLR_BACKENDS="$wlr_backend" WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 WLR_RENDERER_FORCE_SOFTWARE=1 sway -c "$sway_config" & subscreen_pid=$! ; echo "subscreen_pid=$subscreen_pid" ; wait $subscreen_pid)
+      done < <(unset XAUTHORITY; unset XDG_SEAT_PATH; unset XDG_SEAT ; WLR_BACKENDS="$wlr_backend" WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 WLR_RENDERER_FORCE_SOFTWARE=1 sway -c "$sway_config" & subscreen_pid=$! ; echo "subscreen_pid=$subscreen_pid" ; wait $subscreen_pid)
       rm "$sway_config"
       
       if [ "$sway_succeeded" == 0 ] || [ "$original_WAYLAND_DISPLAY" == "$WAYLAND_DISPLAY" ];then
         error "subscreen_start(): Sway failed to start! Please review errors above."
-      fi
-      
-      #set this after sway runs, to get the new WAYLAND_DISPLAY
-      local headless_wayvnc_socket="$RAM_LOCATION/wayvnc-$WAYLAND_DISPLAY.sock"
-      
-      #workaround headless sway not creating a movable mouse pointer: make a VNC server and connect to it with python to keep the mouse active
-      local vncdummy_succeeded=0
-      if [ "$wlr_backend" == headless ];then
-        echo 'waiting for socket'
-        wait_for_file_creation "$headless_wayvnc_socket"
-        
-        while read line ;do
-          echo "$line"
-          if [ "$line" == '[VNC-Dummy] Entering keep-alive loop...' ];then
-            vncdummy_succeeded=1
-            break
-          fi
-        done < <(python3 -c 'import socket, time, os, sys
-
-def log(msg):
-    print(f"[VNC-Dummy] {msg}", flush=True)
-
-sock_path = f"'"$headless_wayvnc_socket"'"
-
-if not os.path.exists(sock_path):
-    log("Socket file not found.")
-    sys.exit(1)
-
-try:
-    s = socket.socket(socket.AF_UNIX)
-    s.connect(sock_path)
-    log("Socket connected successfully.")
-
-    # 1. Version Handshake
-    server_ver = s.recv(12)
-    log(f"Server sent version: {server_ver}")
-    
-    # Respond with standard 3.8 instead of 3.3
-    s.send(b"RFB 003.008\n") 
-    log("Sent client version (003.008).")
-
-    # 2. Security Negotiation (The likely failure point)
-    # Server sends 1 byte (number of types) + N bytes (types)
-    # For a unix socket, it usually sends [1, 1] (1 type supported: None)
-    sec_data = s.recv(1024)
-    log(f"Server sent security data: {list(sec_data)}")
-
-    # We must select the security type "1" (None) to proceed
-    if sec_data and sec_data[0] > 0:
-        s.send(b"\x01") 
-        log("Sent SecurityType: None (1)")
-    
-    # 3. Security Result
-    # Server sends 4 bytes: 0 = OK, 1 = Fail
-    auth_result = s.recv(4)
-    log(f"Auth result (0000 is success): {list(auth_result)}")
-
-    # 4. ClientInit (Required to officially start session)
-    # Send 1 byte: 1 (Shared session)
-    s.send(b"\x01")
-    log("Sent ClientInit (Shared). Session should be active.")
-
-    # Keep alive
-    log("Entering keep-alive loop...")
-    while True: 
-        time.sleep(60)
-
-except Exception as e:
-    log(f"CRITICAL ERROR: {e}")') #the python was vibe coded
-        if [ "$vncdummy_succeeded" == 0 ];then
-          error "subscreen_start(): vnc dummy service failed to start! Please review errors above."
-        fi
       fi
       
       #now no matter the original XDG_SESSION_TYPE, it's now wayland for all subsequent commands until subscreen_stop
@@ -562,7 +471,7 @@ except Exception as e:
   #from this point on, any GUI programs run by the userscript will spawn in the nested display.
   
   #make sure the nested display is killed when the userscript ends
-  trap "subscreen_stop" EXIT SIGINT
+  run_on_exit "subscreen_stop"
 }
 
 subscreen_stop() { #stop a running subscreen. Takes no arguments.
@@ -640,33 +549,28 @@ if [ "$SKIP_INSTALLING_SUBSCREEN_DEPS" != 1 ];then
   if ! command -v python3 >/dev/null ;then
     install_list+=('python3')
   fi
-  if ! command -v wayvnc >/dev/null ;then
-    install_list+=('wayvnc')
-  fi
 fi
 
 #X11 or Wayland have different dependencies
 if [ "$XDG_SESSION_TYPE" == x11 ];then #these dependencies are required only on distros that are X11
-  if ! command -v xdotool >/dev/null ;then
-    install_list+=('xdotool')
-  fi
   if ! command -v scrot >/dev/null ;then
     install_list+=('scrot')
   fi
   if ! command -v xclip >/dev/null ;then
     install_list+=('xclip')
   fi
-elif [ "$XDG_SESSION_TYPE" == wayland ];then #these dependencies are required only on distros that are Wayland
-  #for compiling wlrctl
-  if ! command -v wlrctl >/dev/null ;then
-    need_to_compile_wlrctl=yes
-    install_list+=('cmake' 'libxkbcommon-dev' 'libwayland-dev')
+  if ! command -v x11vnc >/dev/null ;then
+    install_list+=('x11vnc')
   fi
+elif [ "$XDG_SESSION_TYPE" == wayland ];then #these dependencies are required only on distros that are Wayland
   if ! command -v grim >/dev/null ;then
     install_list+=('grim')
   fi
   if ! command -v wl-copy >/dev/null ;then
     install_list+=('wl-clipboard')
+  fi
+  if ! command -v wayvnc >/dev/null ;then
+    install_list+=('wayvnc')
   fi
 fi
 #now if anything is missing, install it
@@ -678,28 +582,28 @@ if [ ! -z "${install_list[*]}" ];then
   status_green "Dependencies installed successfully."
 fi
 
-#compile and install wlrctl if on wayland
-if [ "$need_to_compile_wlrctl" == yes ];then
-  status "Compiling wlrctl..."
-  #run in a subshell to avoid changing current directory (downloads and installs in ram)
-  (cd "$RAM_LOCATION"
-  rm -rf ./wlrctl
-  git clone https://git.sr.ht/~brocellous/wlrctl || exit 1
-  cd wlrctl
-  meson setup --prefix=/usr/local build || exit 1
-  sudo ninja -C build install || exit 1
-  cd "$RAM_LOCATION"
-  rm -rf ./wlrctl) || error "Failed to compile wlrctl. Please review errors above."
-  status_green "wlrctl has installed successfully."
-fi
 #now that dependencies are installed, do other things before userscript runs
 
 #choose appropriate location for locator.py named pipe
 locator_pipe="$PATTERNS_DIR/locator_pipe"
-#remove it while being sourced
-rm -f "$locator_pipe"
 
-#stop locator.py when userscript ends so only advanced users need to run locator_stop
-trap locator_stop EXIT SIGINT
+#choose appropriate location for vnc_injector.py named pipe
+vnc_pipe="$PATTERNS_DIR/vnc_pipe"
+
+#choose appropriate locations for vnc server socket and vnc control sockets
+vnc_socket="$PATTERNS_DIR/vnc.sock"
+vnc_control_socket="$PATTERNS_DIR/vnc-ctl.sock"
+vnc_pid=''
+
+#remove all these files while being sourced
+rm -f "$locator_pipe" "$locator_pipe.out" "$vnc_pipe" "$vnc_socket" "$vnc_control_socket"
+
+#track commands to run when a userscript ends
+exit_commands=''
+#stop daemon when userscript ends so only advanced users need to run daemon_stop
+run_on_exit daemon_stop
+
+#make ctrl+c behave the same as the script being killed (keeps loops from overriding ^C)
+trap 'exit 0' SIGINT
 
 status_green "Automaton API has been sourced"
