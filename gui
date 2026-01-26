@@ -520,7 +520,7 @@ PATTERNS_DIR=$(echo '"'"$PATTERNS_DIR"'"' | sed "s+"\""$HOME+"\"\$"HOME+g")
 AUTOMATON_DIR=$(echo '"'"$AUTOMATON_DIR"'"' | sed "s+"\""$HOME+"\"\$"HOME+g")
 source "\"\$"AUTOMATON_DIR/api"\""
 
-#this starts the pattern locator service, and vnc server to allow keyboars/mouse usage.
+#this starts the pattern locator service, and vnc server to allow keyboard/mouse usage.
 daemon_start
 
 #Your code begins below this line. Happy automating! -Botspot" > "$USERSCRIPT"
