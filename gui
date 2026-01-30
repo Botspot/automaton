@@ -529,6 +529,9 @@ daemon_start
       #make the patterns directory
       mkdir -p "$PATTERNS_DIR"
     fi
+    #source api again now that PATTERNS_DIR is set
+    source "$AUTOMATON_DIR/api" || exit 1
+    
     #set the next mode to use after this
     mode=userscript-editor
     ;;
