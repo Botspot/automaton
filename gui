@@ -39,14 +39,21 @@ gui_pick_pattern_offset() { #Prompt user to choose a point relative to a pattern
   fi
   
   #hopefully nobody includes regex characters in a pattern name
-  local screenshot_regions_line="$(grep "^$pattern\t" "$PATTERNS_DIR/screenshot-regions.tsv" 2>/dev/null | tail -1)"
+  local screenshot_regions_line="$(grep "^${pattern}"$'\t' "$PATTERNS_DIR/screenshot-regions.tsv" 2>/dev/null | tail -1)"
   if [ ! -z "$screenshot_regions_line" ];then
     #found screenshot name and cropped region
     screenshot="$(echo "$screenshot_regions_line" | awk -F'\t' '{print $2}')"
     region="$(echo "$screenshot_regions_line" | awk -F'\t' '{print $3}')"
     
     #if data is invalid, fallback to picking a region only within the pattern
-    if [ -z "$screenshot" ] || [ -z "$region" ] || [ ! -f "$SCREENSHOTS_CACHE/$screenshot" ];then
+    if [ -z "$screenshot" ];then
+      #warning "gui_pick_pattern_offset(): screenshot empty, reverting to no-screenshot mode"
+      screenshot_regions_line=''
+    elif [ -z "$region" ];then
+      #warning "gui_pick_pattern_offset(): region empty, reverting to no-screenshot mode"
+      screenshot_regions_line=''
+    elif [ ! -f "$SCREENSHOTS_CACHE/$screenshot" ];then
+      #warning "gui_pick_pattern_offset(): screenshot missing, reverting to no-screenshot mode"
       screenshot_regions_line=''
     fi
   fi
