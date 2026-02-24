@@ -139,8 +139,6 @@ class ImagePointSelector:
             self.scaled_surface.fill((0, 0, 0))
             self.image_pos_x = 0
             self.image_pos_y = 0
-            self.crop_left = crop_left
-            self.crop_top = crop_top
             self.display_width = self.window_width
             self.display_height = self.window_height
             return self.scaled_surface
@@ -149,11 +147,9 @@ class ImagePointSelector:
         crop_rect = pygame.Rect(render_left, render_top, render_right - render_left, render_bottom - render_top)
         cropped_surface = self.original_image.subsurface(crop_rect)
 
-        # Calculate display position and size
-        display_width = int((crop_right - crop_left) * self.zoom_factor)
-        display_height = int((crop_bottom - crop_top) * self.zoom_factor)
-        image_offset_x = (render_left - crop_left) * self.zoom_factor
-        image_offset_y = (render_top - crop_top) * self.zoom_factor
+        # Calculate precise sub-pixel rendering offsets
+        image_offset_x = (render_left - self.view_x) * self.zoom_factor
+        image_offset_y = (render_top - self.view_y) * self.zoom_factor
 
         # Create a surface for the full visible area, filled with black
         self.scaled_surface = pygame.Surface((self.window_width, self.window_height))
@@ -162,35 +158,33 @@ class ImagePointSelector:
         # Scale the cropped surface
         scaled_cropped = pygame.transform.scale(cropped_surface, (int((render_right - render_left) * self.zoom_factor), int((render_bottom - render_top) * self.zoom_factor)))
 
-        # Blit the scaled image onto the surface at the correct offset
-        self.scaled_surface.blit(scaled_cropped, (image_offset_x, image_offset_y))
+        # Blit the scaled image onto the surface at the precise offset (rounded for pygame coords)
+        self.scaled_surface.blit(scaled_cropped, (int(round(image_offset_x)), int(round(image_offset_y))))
 
-        # Store crop info
+        # Store display info
         self.image_pos_x = 0  # Full surface covers the window
         self.image_pos_y = 0
-        self.crop_left = crop_left
-        self.crop_top = crop_top
         self.display_width = self.window_width
         self.display_height = self.window_height
 
         return self.scaled_surface
 
-    def _canvas_to_original(self, canvas_x, canvas_y, apply_bounds=True):
+    def _canvas_to_original(self, canvas_x, canvas_y):
         canvas_x = self._clamp(canvas_x, 0, self.window_width)
         canvas_y = self._clamp(canvas_y, 0, self.window_height)
-        orig_x = self.crop_left + (canvas_x - self.image_pos_x) / self.zoom_factor
-        orig_y = self.crop_top + (canvas_y - self.image_pos_y) / self.zoom_factor
-        x = int(self._clamp(orig_x, 0, self.original_width - 1))
-        y = int(self._clamp(orig_y, 0, self.original_height - 1))
-        # Constrain to rectangle bounds in pixel_in_rectangle mode only for selection
-        if apply_bounds and self.mode == 'pixel_in_rectangle':
-            x = self._clamp(x, self.rect_x, self.rect_x + self.rect_width - 1)
-            y = self._clamp(y, self.rect_y, self.rect_y + self.rect_height - 1)
+        
+        # Use purely precise floats to eliminate rendering drift
+        orig_x = self.view_x + (canvas_x - self.image_pos_x) / self.zoom_factor
+        orig_y = self.view_y + (canvas_y - self.image_pos_y) / self.zoom_factor
+        
+        x = int(math.floor(self._clamp(orig_x, 0, self.original_width - 1)))
+        y = int(math.floor(self._clamp(orig_y, 0, self.original_height - 1)))
         return x, y
 
     def _original_to_canvas(self, orig_x, orig_y):
-        canvas_x = self.image_pos_x + (orig_x - self.crop_left) * self.zoom_factor
-        canvas_y = self.image_pos_y + (orig_y - self.crop_top) * self.zoom_factor
+        # Precise float math tracking purely coordinates without integer boundaries
+        canvas_x = self.image_pos_x + (orig_x - self.view_x) * self.zoom_factor
+        canvas_y = self.image_pos_y + (orig_y - self.view_y) * self.zoom_factor
         return canvas_x, canvas_y
 
     def run(self):
@@ -233,7 +227,7 @@ class ImagePointSelector:
                                 # Output offset from rectangle's top-left
                                 offset_x = self.x - self.rect_x
                                 offset_y = self.y - self.rect_y
-                                print(f"+{offset_x}+{offset_y}")
+                                print(f"{offset_x:+d}{offset_y:+d}")
                             else:
                                 print(f"{self.x},{self.y}")
                             sys.stdout.flush()
@@ -323,7 +317,7 @@ class ImagePointSelector:
                 "Click and drag to select a rectangle, scroll or +/- to zoom", True, (255, 255, 255), (0, 0, 0))
             coord_text = self.font.render(
                 f"{self.x},{self.y}" if self.mode == 'pixel' else
-                f"+{self.x - self.rect_x}+{self.y - self.rect_y}" if self.mode == 'pixel_in_rectangle' else
+                f"{self.x - self.rect_x:+d}{self.y - self.rect_y:+d}" if self.mode == 'pixel_in_rectangle' else
                 f"{self.last_displayed_x if self.is_dragging else self.x},"
                 f"{self.last_displayed_y if self.is_dragging else self.y} "
                 f"+{self.last_displayed_length if self.is_dragging else 1}+"
@@ -348,15 +342,13 @@ class ImagePointSelector:
             self.clock.tick(60)
 
     def _zoom_at(self, new_zoom_index, mouse_x, mouse_y):
-        # Do not apply rectangle bounds for zooming
-        mouse_orig_x, mouse_orig_y = self._canvas_to_original(mouse_x, mouse_y, apply_bounds=False)
-
         self.zoom_index = new_zoom_index
         self.zoom_factor = self.zoom_levels[self.zoom_index]
 
-        self.view_x = mouse_orig_x - (mouse_x - self.image_pos_x) / self.zoom_factor
-        self.view_y = mouse_orig_y - (mouse_y - self.image_pos_y) / self.zoom_factor
-        # No clamping here to allow black padding
+        # Snap the view so the top-left intersection of the currently selected pixel (the crosshairs)
+        # sits EXACTLY at the mouse's screen coordinates. This creates a perfect lock.
+        self.view_x = self.x - (mouse_x - self.image_pos_x) / self.zoom_factor
+        self.view_y = self.y - (mouse_y - self.image_pos_y) / self.zoom_factor
 
         self._update_scaled_image()
 

@@ -556,7 +556,7 @@ Please assume I have little scripting experience, so make explanations beginner-
 The script in question is named \`${USERSCRIPT}\` and is intended to automate graphical tasks in the $XDG_SESSION_TYPE desktop environment, using shell functions provided by the Automaton project on github. https://github.com/Botspot/automaton
 Below is all Automaton functions. This list was generated with: \`grep -F '() {' "\""$AUTOMATON_DIR/api"\""\`.
 \`\`\`
-$(grep -F '() {' "$AUTOMATON_DIR/api")
+$(grep -F '() { #' "$AUTOMATON_DIR/api")
 \`\`\`
 Important notes:
 - AUTOMATON_DIR=$AUTOMATON_DIR - path to the automaton git repo, which contains api, gui, and other automaton helper scripts.

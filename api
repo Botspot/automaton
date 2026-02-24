@@ -46,7 +46,7 @@ status_green() { #announce the success of a major action
   echo -e "\e[92m$1\e[0m" 1>&2
 }
 
-wait_for_file_creation() {
+wait_for_file_creation() { #waits for the $1 file to be created, using inotifywait instead of using a loop. Returns 0 once the file is created.
   local file="$1"
   if [ -z "$file" ]; then
     error "wait_for_file_creation() requires a file argument"
@@ -179,7 +179,7 @@ locate_pattern() { #locate where on the screen the $1 pattern is, using opencv. 
   #UPDATE: this seems to have been fixed on the pi os side... if uncommenting, don't use wlrctl
   
   #pixel offset provided ahead of time. Format: +X+Y
-  if [[ "$2" == '+'* ]];then
+  if [[ "$2" == '+'* ]] || [[ "$2" == '-'* ]];then
     local offset="$2"
   elif [ "$2" == center ];then
     #If requested, use center midpoint of pattern, which is +L/2+W/2 of the image dimensions.
@@ -211,8 +211,8 @@ locate_pattern() { #locate where on the screen the $1 pattern is, using opencv. 
       #otherwise, apply the offset before outputting it
       local x_location="$(echo "$location" | awk -F, '{print $1}')"
       local y_location="$(echo "$location" | awk -F, '{print $2}')"
-      local x_offset="$(echo "$offset" | awk -F + '{print $2}')"
-      local y_offset="$(echo "$offset" | awk -F + '{print $3}')"
+      local x_offset="$(echo "$offset" | sed 's/-/+-/g' | awk -F + '{print $2}')"
+      local y_offset="$(echo "$offset" | sed 's/-/+-/g' | awk -F + '{print $3}')"
       location=$((x_location+x_offset)),$((y_location+y_offset))
     fi
     echo "$location $similarity"
@@ -240,6 +240,15 @@ locate_pattern_retry() { #runs locate_pattern repeatedly until it succeeds. loca
   done
 }
 
+await_vnc_acknowledgement() {
+  #no use for end users - ensures that clicks, scrolls, mouse movements, and keyboard usage is actually received by the vnc server
+  local response=''
+  read -r -t 5 response < "$vnc_pipe"
+  if [ "$response" != OK ];then
+    error "await_vnc_acknowledgement(): failed to get an acknowledgement from the vnc server that the operation succeeded!"
+  fi
+}
+
 mouse_move() { #move mouse to absolute position $1 (format X,Y). Rather than specify raw coordinates, use something like $(locate_pattern button.png center). Also, if applicable, don't forget to mouse_click after moving the mouse!
   local IFS=' ' #ensure the $() gets split into 2 arguments
   local coordinates="$(echo "$1" | awk '{print $1}')"
@@ -252,6 +261,7 @@ mouse_move() { #move mouse to absolute position $1 (format X,Y). Rather than spe
   fi
   
   echo "mousemove $(echo "$coordinates" | tr ',' ' ')" > "$vnc_pipe"
+  await_vnc_acknowledgement
 }
 
 mouse_click() { #normal mouse click
@@ -260,6 +270,7 @@ mouse_click() { #normal mouse click
   fi
   
   echo "mouseclick 1" > "$vnc_pipe"
+  await_vnc_acknowledgement
 }
 
 mouse_right_click() { #mouse do a right-click
@@ -268,6 +279,7 @@ mouse_right_click() { #mouse do a right-click
   fi
   
   echo "mouseclick 3" > "$vnc_pipe"
+  await_vnc_acknowledgement
 }
 
 mouse_middle_click() { #mouse press the scroll wheel
@@ -276,6 +288,7 @@ mouse_middle_click() { #mouse press the scroll wheel
   fi
   
   echo "mouseclick 2" > "$vnc_pipe"
+  await_vnc_acknowledgement
 }
 
 mouse_scroll() { #scroll $1=[up/down] $2 times (scroll once if $2 not specified)
@@ -302,6 +315,7 @@ mouse_scroll() { #scroll $1=[up/down] $2 times (scroll once if $2 not specified)
   else
     error "mouse_scroll(): first argument must be 'up' or 'down'. Got '$1'"
   fi
+  await_vnc_acknowledgement
   sleep 0.5s #browsers animate after scroll event, so wait for it to finish
 }
 
@@ -334,6 +348,7 @@ keyboard_type() { #type text in $1 with the keyboard
     error "keyboard_type(): $vnc_pipe does not exist. Please run the daemon_start function first."
   fi
   echo "keyboardtype $1" > "$vnc_pipe"
+  await_vnc_acknowledgement
 }
 
 keyboard_shortcut() { #press multiple keys at once, and special keys. one argument per key. Example: keyboard_shortcut Ctrl Alt a    Allowed special keys (case-insensitive): enter return backspace tab esc escape delete del home end pgup pageup pgdn pagedown left up right down f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 shift rshift ctrl rctrl control alt ralt meta super win cmd space
@@ -342,6 +357,7 @@ keyboard_shortcut() { #press multiple keys at once, and special keys. one argume
     error "keyboard_shortcut(): $vnc_pipe does not exist. Please run the daemon_start function first."
   fi
   echo "keyboardshortcut $*" > "$vnc_pipe"
+  await_vnc_acknowledgement
 }
 
 subscreen_start() { #start a nested x or wayland display (type must be specified in $1: x11, x11-headless, wayland, wayland-headless)

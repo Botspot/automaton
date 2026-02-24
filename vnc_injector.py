@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-#This was 100% vibe-coded by Gemini 3 in about 5 minutes. Impressive.
+#This was 100% vibe-coded by Gemini 3 in about 10 minutes. Impressive.
 
 import socket
 import sys
@@ -9,9 +9,9 @@ import struct
 import threading
 import argparse
 import time
+import errno
 
 # --- Constants & Key Mappings ---
-# X11 Keysyms for common special keys
 KEY_MAP = {
     'enter': 0xFF0D, 'return': 0xFF0D,
     'backspace': 0xFF08, 'tab': 0xFF09,
@@ -32,10 +32,11 @@ KEY_MAP = {
     'space': 0x0020
 }
 
-# Mouse State
+# State Variables
 mouse_x = 0
 mouse_y = 0
 mouse_buttons = 0  # Bitmask: 1=Left, 2=Middle, 4=Right
+vnc_sync_event = threading.Event()
 
 def log(msg):
     print(f"[VNC-Injector] {msg}", flush=True)
@@ -64,8 +65,36 @@ def get_keysym(key_str):
     if key_str in KEY_MAP:
         return KEY_MAP[key_str]
     if len(key_str) == 1:
-        return ord(key_str) # ASCII map
+        return ord(key_str)
     return 0
+
+def force_vnc_sync(sock):
+    """Forces VNC to sync by requesting a 1x1 pixel update and waiting for the reply."""
+    global vnc_sync_event
+    vnc_sync_event.clear()
+    # Type 3: FramebufferUpdateRequest (1 byte type, 1 byte incremental(0), 2 bytes x, 2 bytes y, 2 bytes w, 2 bytes h)
+    sync_req = struct.pack("!B B H H H H", 3, 0, 0, 0, 1, 1)
+    sock.sendall(sync_req)
+    # Wait up to 1 second for the server to reply and the drainer thread to flag it
+    vnc_sync_event.wait(timeout=1.0)
+
+def send_ack(pipe_path):
+    """Sends ACK using non-blocking I/O, retrying if Bash isn't ready to read yet."""
+    start_time = time.time()
+    while time.time() - start_time < 1.0:
+        try:
+            # Open strictly for writing, and fail instantly if no reader exists
+            fd = os.open(pipe_path, os.O_WRONLY | os.O_NONBLOCK)
+            os.write(fd, b"OK\n")
+            os.close(fd)
+            return
+        except OSError as e:
+            # ENXIO (No such device or address) means Bash hasn't executed `read` yet.
+            if e.errno == errno.ENXIO:
+                time.sleep(0.01) # Wait a tiny fraction of a second and try again
+            else:
+                raise e
+    log("Warning: Bash did not read the ACK in time. Continuing to prevent freeze.")
 
 # --- Background Listeners ---
 
@@ -73,12 +102,15 @@ def socket_drainer(sock):
     """
     Reads data from socket to keep buffer clear and detect server disconnects.
     """
+    global vnc_sync_event
     try:
         while True:
             data = sock.recv(4096)
             if not data:
                 log("Server closed connection.")
-                os._exit(1) # Force exit main thread
+                os._exit(1)
+            # Flag that the server sent data back (our sync response)
+            vnc_sync_event.set()
     except Exception as e:
         pass # Socket closed locally
 
@@ -95,7 +127,7 @@ def pipe_monitor(pipe_path):
 # --- Main Logic ---
 
 def main():
-    global mouse_x, mouse_y, mouse_buttons
+    global mouse_x, mouse_y, mouse_buttons, vnc_sync_event
 
     parser = argparse.ArgumentParser(description="VNC Input Injector")
     parser.add_argument("socket", help="Path to the VNC server Unix socket")
@@ -178,80 +210,74 @@ def main():
         # Loop to keep reading if multiple writers connect/disconnect
         while os.path.exists(pipe_path):
             try:
-                # Blocks here until a writer connects
+                # 1. Wait for Bash to send command
                 with open(pipe_path, 'r') as pipe_in:
-                    for line in pipe_in:
-                        # Check exit condition continuously
-                        if not os.path.exists(pipe_path):
-                            sys.exit(0)
+                    line = pipe_in.readline()
 
-                        parts = line.strip().split()
-                        if not parts:
-                            continue
+                if not line:
+                    time.sleep(0.01)
+                    continue
 
-                        cmd = parts[0].lower()
+                parts = line.strip().split()
+                if not parts:
+                    continue
 
-                        try:
-                            # Removed "exit" command per instructions
+                cmd = parts[0].lower()
+                valid_cmd_executed = False
 
-                            if cmd == "mousemove":
-                                # usage: mousemove 100 200
-                                if len(parts) >= 3:
-                                    mouse_x = int(parts[1])
-                                    mouse_y = int(parts[2])
-                                    send_pointer_event(s, mouse_x, mouse_y, mouse_buttons)
+                if cmd == "mousemove":
+                    if len(parts) >= 3:
+                        mouse_x = int(parts[1])
+                        mouse_y = int(parts[2])
+                        send_pointer_event(s, mouse_x, mouse_y, mouse_buttons)
+                        valid_cmd_executed = True
 
-                            elif cmd == "mouseclick":
-                                # usage: mouseclick 1 (1=left, 2=middle, 3=right)
-                                if len(parts) >= 2:
-                                    btn_id = int(parts[1])
-                                    # VNC Mask: 1=Left(1), 2=Middle(2), 4=Right(3)
-                                    # We map user input 1,2,3 to masks 1,2,4
-                                    mask = 0
-                                    if btn_id == 1: mask = 1
-                                    elif btn_id == 2: mask = 2
-                                    elif btn_id == 3: mask = 4
-                                    elif btn_id == 4: mask = 8 # scroll up
-                                    elif btn_id == 5: mask = 16 # scroll down
+                elif cmd == "mouseclick":
+                    if len(parts) >= 2:
+                        btn_id = int(parts[1])
+                        mask = 0
+                        if btn_id == 1: mask = 1
+                        elif btn_id == 2: mask = 2
+                        elif btn_id == 3: mask = 4
+                        elif btn_id == 4: mask = 8 
+                        elif btn_id == 5: mask = 16 
 
-                                    # Click = Down, then Up
-                                    # Note: We assume click doesn't hold. 
-                                    # To hold, we'd need separate mousedown/mouseup commands.
-                                    send_pointer_event(s, mouse_x, mouse_y, mask)
-                                    time.sleep(0.01) # Small debounce
-                                    send_pointer_event(s, mouse_x, mouse_y, 0)
+                        send_pointer_event(s, mouse_x, mouse_y, mask)
+                        time.sleep(0.01)
+                        send_pointer_event(s, mouse_x, mouse_y, 0)
+                        valid_cmd_executed = True
 
-                            elif cmd == "keyboardtype":
-                                # usage: keyboardtype hello world
-                                text = " ".join(parts[1:])
-                                for char in text:
-                                    k = ord(char)
-                                    send_key_event(s, k, True)
-                                    send_key_event(s, k, False)
+                elif cmd == "keyboardtype":
+                    if len(parts) >= 2:
+                        text = " ".join(parts[1:])
+                        for char in text:
+                            k = ord(char)
+                            send_key_event(s, k, True)
+                            send_key_event(s, k, False)
+                        valid_cmd_executed = True
 
-                            elif cmd == "keyboardshortcut":
-                                # usage: keyboardshortcut ctrl-alt-delete
-                                keys = parts[1:]
-                                resolved_keys = []
-                                
-                                # Press all
-                                for k in keys:
-                                    ksym = get_keysym(k)
-                                    if ksym:
-                                        resolved_keys.append(ksym)
-                                        send_key_event(s, ksym, True)
-                                
-                                # Release all (reversed)
-                                for ksym in reversed(resolved_keys):
-                                    send_key_event(s, ksym, False)
+                elif cmd == "keyboardshortcut":
+                    if len(parts) >= 2:
+                        keys = parts[1:]
+                        resolved_keys = []
+                        for k in keys:
+                            ksym = get_keysym(k)
+                            if ksym:
+                                resolved_keys.append(ksym)
+                                send_key_event(s, ksym, True)
+                        for ksym in reversed(resolved_keys):
+                            send_key_event(s, ksym, False)
+                        valid_cmd_executed = True
 
-                            else:
-                                log(f"Unknown command: {cmd}")
+                else:
+                    log(f"Unknown command: {cmd}")
 
-                        except Exception as e:
-                            log(f"Error processing command '{line.strip()}': {e}")
+                # 2. Sync and Acknowledge
+                if valid_cmd_executed:
+                    force_vnc_sync(s)
+                    send_ack(pipe_path)
+
             except OSError:
-                # Handle cases where open fails or pipe is deleted during open
                 if not os.path.exists(pipe_path):
                     sys.exit(0)
                 time.sleep(0.1)
