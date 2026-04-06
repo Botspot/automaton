@@ -305,12 +305,12 @@ mouse_scroll() { #scroll $1=[up/down] $2 times (scroll once if $2 not specified)
   if [ "$scrolldirection" == down ];then
     #scroll down
     for ((n=0;n<$scrolltimes;n++)); do
-      echo "mouseclick 5" > "$vnc_pipe"
+      echo "mouseclick 5" > "$vnc_pipe" || error "mouse_scroll(): failed to send data to vnc pipe $vnc_pipe"
     done
   elif [ "$scrolldirection" == up ];then
     #scroll up
     for ((n=0;n<$scrolltimes;n++)); do
-      echo "mouseclick 4" > "$vnc_pipe"
+      echo "mouseclick 4" > "$vnc_pipe" || error "mouse_scroll(): failed to send data to vnc pipe $vnc_pipe"
     done
   else
     error "mouse_scroll(): first argument must be 'up' or 'down'. Got '$1'"
